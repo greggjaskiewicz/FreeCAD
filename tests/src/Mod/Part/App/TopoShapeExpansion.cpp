@@ -20,6 +20,8 @@
 #include <BRepOffsetAPI_MakeEvolved.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepTools.hxx>
+#include <BRep_Builder.hxx>
 #include <GeomAPI_PointsToBSpline.hxx>
 #include <Geom_BezierCurve.hxx>
 #include <Geom_BezierSurface.hxx>
@@ -2372,6 +2374,30 @@ TEST_F(TopoShapeExpansionTest, makeElementFillet)
             "Vertex8;:G;FLT;:H1:7,F;:U2;FLT;:H1:8,E",
         }
     ));
+}
+
+TEST_F(TopoShapeExpansionTest, makeElementChamferCrashOnStaleShape)
+{
+    // Regression test: OCCT crashes in ChFi3d_Builder::IntersectMoreCorner when
+    // chamfering/filleting edges at vertices where 3+ edges meet on a shape that
+    // carries stale internal caches from prior operations. Without the
+    // BRepBuilderAPI_Copy fix this test segfaults (exit 139).
+    // The BREP file is the output of a real model after 7 chained chamfer operations.
+    std::string brepPath = App::Application::getHomePath() + "/tests/brepfiles/chamfer007.brep";
+    BRep_Builder builder;
+    TopoDS_Shape shape;
+    ASSERT_TRUE(BRepTools::Read(shape, brepPath.c_str(), builder));
+
+    TopoShape ts {shape, 1L};
+    auto edges = ts.getSubTopoShapes(TopAbs_EDGE);
+    ASSERT_GT(edges.size(), 6);
+
+    // Edge7 (index 6) sits at a vertex where 3 edges meet — triggers IntersectMoreCorner
+    std::vector<TopoShape> edgesToChamfer = {edges[6]};
+    TopoShape result {2L};
+    result.makeElementChamfer(ts, edgesToChamfer, ChamferType::equalDistance, 1.0, 1.0);
+    EXPECT_FALSE(result.getShape().IsNull());
+    EXPECT_TRUE(result.isValid());
 }
 
 TEST_F(TopoShapeExpansionTest, makeElementSlice)

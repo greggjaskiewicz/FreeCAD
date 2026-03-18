@@ -33,6 +33,7 @@ add_executable(Part_tests_run
 )
 
 set(PartTestData_Files
+        brepfiles/chamfer007.brep
         brepfiles/cylinder1.brep
         brepfiles/helix1.brep
 )
