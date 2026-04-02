@@ -49,6 +49,7 @@
 #include "Control.h"
 #include "DockWindowManager.h"
 #include "FileDialog.h"
+#include "ICloudUtils.h"
 #include "MainWindow.h"
 #include "Selection.h"
 #include "Dialogs/DlgObjectSelection.h"
@@ -146,6 +147,21 @@ void StdCmdOpen::activated(int iMsg)
         QString(),
         formatList,
         &selectedFilter
+    );
+    if (fileList.isEmpty()) {
+        return;
+    }
+
+    // Ensure iCloud Drive files are downloaded before opening
+    fileList.erase(
+        std::remove_if(
+            fileList.begin(),
+            fileList.end(),
+            [](const QString& file) {
+                return !Gui::ensureICloudFileAvailable(file, getMainWindow());
+            }
+        ),
+        fileList.end()
     );
     if (fileList.isEmpty()) {
         return;

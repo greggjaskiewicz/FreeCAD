@@ -1412,6 +1412,13 @@ SET(FreeCADGui_CPP_SRCS
     StyleParameters/Parser.cpp
     StyleParameters/ParameterManager.cpp
 )
+
+if(APPLE)
+    list(APPEND FreeCADGui_CPP_SRCS ICloudUtils.mm)
+else()
+    list(APPEND FreeCADGui_CPP_SRCS ICloudUtils.cpp)
+endif()
+
 SET(FreeCADGui_SRCS
     Application.h
     AutoSaver.h
@@ -1431,6 +1438,7 @@ SET(FreeCADGui_SRCS
     GuiApplicationNativeEventAware.h
     3Dconnexion/GuiAbstractNativeEvent.h
     GuiConsole.h
+    ICloudUtils.h
     InventorAll.h
     InputHint.h
     InputHintPy.h
@@ -1560,6 +1568,10 @@ endif ()
 
 target_sources(FreeCADGui PRIVATE ${FreeCADGui_SRCS})
 target_link_libraries(FreeCADGui PUBLIC ${FreeCADGui_LIBS})
+
+if(APPLE)
+    target_link_libraries(FreeCADGui PRIVATE "-framework Foundation")
+endif()
 
 if (MSVC)
     target_compile_definitions(FreeCADGui PRIVATE WIN32_LEAN_AND_MEAN)

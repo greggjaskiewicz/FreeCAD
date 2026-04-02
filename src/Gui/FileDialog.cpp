@@ -191,6 +191,9 @@ QList<QUrl> FileDialog::fetchSidebarUrls()
     list << QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
     list << QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     list << QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+#ifdef Q_OS_MACOS
+    list << QDir::homePath() + QStringLiteral("/Library/Mobile Documents/com~apple~CloudDocs");
+#endif
     list << getPreferredDialogDirectory();
     list << restoreLocation();
     list << QDir::currentPath();
