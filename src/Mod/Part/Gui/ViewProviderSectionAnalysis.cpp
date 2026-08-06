@@ -19,7 +19,9 @@
  *                                                                            *
  ******************************************************************************/
 
-#include <cstring>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <functional>
 
 #include <QAction>
@@ -27,22 +29,30 @@
 #include <QTimer>
 
 #include <Bnd_Box.hxx>
+#include <BRep_Builder.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRep_Tool.hxx>
+#include <TopExp.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
+#include <TopoDS_Edge.hxx>
+#include <TopoDS_Vertex.hxx>
 
-#include <Inventor/actions/SoSearchAction.h>
+#include <Inventor/nodes/SoBaseColor.h>
 #include <Inventor/nodes/SoClipPlane.h>
 #include <Inventor/nodes/SoCoordinate3.h>
 #include <Inventor/nodes/SoDrawStyle.h>
 #include <Inventor/nodes/SoFaceSet.h>
-#include <Inventor/nodes/SoIndexedFaceSet.h>
 #include <Inventor/nodes/SoIndexedLineSet.h>
+#include <Inventor/nodes/SoLightModel.h>
 #include <Inventor/nodes/SoMaterial.h>
 #include <Inventor/nodes/SoPickStyle.h>
+#include <Inventor/nodes/SoPolygonOffset.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/nodes/SoShapeHints.h>
 #include <Inventor/nodes/SoSwitch.h>
-#include <Inventor/nodes/SoTexture2.h>
-#include <Inventor/nodes/SoTextureCoordinatePlane.h>
 
 #include <App/Application.h>
 #include <App/Document.h>
@@ -59,6 +69,7 @@
 #include <Gui/View3DInventorViewer.h>
 #include <Gui/ViewProvider.h>
 #include <Mod/Part/App/FeatureSectionAnalysis.h>
+#include <Mod/Part/App/FCBRepAlgoAPI_Common.h>
 
 #include "ViewProviderExt.h"
 #include "ViewProviderSectionAnalysis.h"
@@ -97,14 +108,6 @@ ViewProviderSectionAnalysis::ViewProviderSectionAnalysis()
 ViewProviderSectionAnalysis::~ViewProviderSectionAnalysis()
 {
     removeClipPlane();
-    if (pcHatchTexture) {
-        pcHatchTexture->unref();
-        pcHatchTexture = nullptr;
-    }
-    if (pcHatchCoordGen) {
-        pcHatchCoordGen->unref();
-        pcHatchCoordGen = nullptr;
-    }
 }
 
 void ViewProviderSectionAnalysis::attach(App::DocumentObject* pcFeat)
@@ -163,40 +166,38 @@ void ViewProviderSectionAnalysis::attach(App::DocumentObject* pcFeat)
     pcPlaneSwitch->whichChild = SO_SWITCH_ALL;
     pcRoot->addChild(pcPlaneSwitch);
 
-    // Create hatching texture — 45° diagonal lines per ISO 128-50.
-    // Large texture + binary alpha for crisp lines.
-    pcHatchTexture = new SoTexture2();
-    pcHatchTexture->ref();
-    {
-        // Small tileable texture — GPU repeats it via GL_REPEAT.
-        // 16x16 with one diagonal line = minimal memory, same visual.
-        const int sz = 16;
-        const int lineWidth = 1;
-        unsigned char* img = new unsigned char[sz * sz * 3];
-        std::memset(img, 255, sz * sz * 3);  // white background
-        for (int y = 0; y < sz; y++) {
-            for (int x = 0; x < sz; x++) {
-                int idx = (y * sz + x) * 3;
-                if (((x + y) % sz) < lineWidth) {
-                    img[idx] = 25;
-                    img[idx + 1] = 25;
-                    img[idx + 2] = 25;
-                }
-            }
-        }
-        pcHatchTexture->image.setValue(SbVec2s(sz, sz), 3, img);
-        pcHatchTexture->wrapS = SoTexture2::REPEAT;
-        pcHatchTexture->wrapT = SoTexture2::REPEAT;
-        pcHatchTexture->model = SoTexture2::MODULATE;
-        delete[] img;
-    }
-
-    // Auto-generate texture coordinates by projecting onto the cutting plane.
-    // directionS/T are updated in updateHatchProjection() to match the
-    // current normal so the 45° pattern is always correct.
-    pcHatchCoordGen = new SoTextureCoordinatePlane();
-    pcHatchCoordGen->ref();
-    updateHatchProjection();
+    // Keep the vector hatch in its own subtree so its render state does not
+    // affect the section faces and visibility can be changed with one switch.
+    // The lines follow the ISO 128-50 45° convention.
+    pcHatchSwitch = new SoSwitch();
+    auto* hatchRoot = new SoSeparator();
+    auto* hatchPickStyle = new SoPickStyle();
+    hatchPickStyle->style = SoPickStyle::UNPICKABLE;
+    hatchRoot->addChild(hatchPickStyle);
+    auto* hatchLightModel = new SoLightModel();
+    hatchLightModel->model = SoLightModel::BASE_COLOR;
+    hatchRoot->addChild(hatchLightModel);
+    auto* hatchColor = new SoBaseColor();
+    hatchColor->rgb.setValue(0.1f, 0.1f, 0.1f);
+    hatchRoot->addChild(hatchColor);
+    auto* hatchStyle = new SoDrawStyle();
+    hatchStyle->lineWidth.setValue(1.0f);
+    hatchRoot->addChild(hatchStyle);
+    // Pull coplanar hatch lines slightly toward the viewer to avoid z-fighting
+    // with the section faces without modifying their actual coordinates.
+    auto* hatchOffset = new SoPolygonOffset();
+    hatchOffset->factor = -1.0f;
+    hatchOffset->units = -1.0f;
+    hatchOffset->styles = SoPolygonOffset::LINES;
+    hatchRoot->addChild(hatchOffset);
+    pcHatchCoords = new SoCoordinate3();
+    hatchRoot->addChild(pcHatchCoords);
+    pcHatchLines = new SoIndexedLineSet();
+    hatchRoot->addChild(pcHatchLines);
+    pcHatchSwitch->addChild(hatchRoot);
+    pcHatchSwitch->whichChild = SO_SWITCH_NONE;
+    pcRoot->addChild(pcHatchSwitch);
+    updateHatchGeometry();
 
     updatePlaneVisual();
 }
@@ -215,7 +216,7 @@ void ViewProviderSectionAnalysis::finishRestoring()
         installClipPlane();
     }
     updatePlaneVisual();
-    updateHatchProjection();
+    updateHatchGeometry();
     if (usePerSolidColors) {
         applyPerSolidColors();
     }
@@ -541,21 +542,32 @@ void ViewProviderSectionAnalysis::updatePlaneVisual()
     pcPlaneBorderLines->coordIndex.setValues(0, 6, borderIndices);
 }
 
-void ViewProviderSectionAnalysis::updateHatchProjection()
+void ViewProviderSectionAnalysis::updateHatchGeometry()
 {
-    if (!pcHatchCoordGen) {
+    if (!pcHatchCoords || !pcHatchLines) {
         return;
     }
 
+    // Clear the previous result first so a failed or empty rebuild cannot
+    // leave stale hatching visible.
+    pcHatchCoords->point.setNum(0);
+    pcHatchLines->coordIndex.setNum(0);
+
     auto* feat = getObject<Part::SectionAnalysis>();
-    Base::Vector3d n(0, 0, 1);
-    if (feat) {
-        n = feat->PlaneNormal.getValue();
-        double len = n.Length();
-        if (len > 1e-10) {
-            n = n / len;
-        }
+    if (!feat) {
+        return;
     }
+    const TopoDS_Shape& sectionShape = feat->Shape.getValue();
+    if (sectionShape.IsNull()) {
+        return;
+    }
+
+    Base::Vector3d n = feat->PlaneNormal.getValue();
+    double len = n.Length();
+    if (len < 1e-10) {
+        return;
+    }
+    n = n / len;
 
     // Build orthonormal frame on the cutting plane
     Base::Vector3d u, v;
@@ -569,12 +581,110 @@ void ViewProviderSectionAnalysis::updateHatchProjection()
     v = n.Cross(u);
     v.Normalize();
 
-    // 1 texture repeat per 8mm — gives ~1 line every 2mm
-    float scale = 1.0f / 8.0f;
-    pcHatchCoordGen->directionS.setValue(SbVec3f(u.x * scale, u.y * scale, u.z * scale));
-    pcHatchCoordGen->directionT.setValue(SbVec3f(v.x * scale, v.y * scale, v.z * scale));
-}
+    // Rotating the plane basis by 45° gives the direction of each hatch line
+    // and the perpendicular direction along which the lines are repeated.
+    const Base::Vector3d lineDir = (u - v) / std::sqrt(2.0);
+    const Base::Vector3d lineNormal = (u + v) / std::sqrt(2.0);
 
+    Bnd_Box bbox;
+    BRepBndLib::Add(sectionShape, bbox);
+    if (bbox.IsVoid()) {
+        return;
+    }
+
+    double xmin, ymin, zmin, xmax, ymax, zmax;
+    bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double corners[8][3] = {
+        {xmin, ymin, zmin},
+        {xmax, ymin, zmin},
+        {xmin, ymax, zmin},
+        {xmax, ymax, zmin},
+        {xmin, ymin, zmax},
+        {xmax, ymin, zmax},
+        {xmin, ymax, zmax},
+        {xmax, ymax, zmax}
+    };
+    // Project the bounding-box corners onto the hatch axes. The resulting
+    // conservative ranges ensure that the untrimmed grid covers every face.
+    double dirMin = 1e100;
+    double dirMax = -1e100;
+    double normalMin = 1e100;
+    double normalMax = -1e100;
+    for (const auto& c : corners) {
+        Base::Vector3d point(c[0], c[1], c[2]);
+        dirMin = std::min(dirMin, point * lineDir);
+        dirMax = std::max(dirMax, point * lineDir);
+        normalMin = std::min(normalMin, point * lineNormal);
+        normalMax = std::max(normalMax, point * lineNormal);
+    }
+
+    // Preserve the perpendicular spacing of the former 8 mm square texture:
+    // the distance between its x+y=constant diagonals is 8/sqrt(2) mm.
+    const double spacing = 8.0 / std::sqrt(2.0);
+    constexpr int maxHatchLines = 10000;
+    int firstLine = static_cast<int>(std::floor(normalMin / spacing));
+    int lastLine = static_cast<int>(std::ceil(normalMax / spacing));
+    // Avoid handing an unexpectedly large grid to the Boolean operation.
+    if (lastLine - firstLine + 1 > maxHatchLines) {
+        return;
+    }
+
+    // Build all candidate lines as one compound so they can be clipped in a
+    // single Boolean operation rather than running one operation per line.
+    BRep_Builder builder;
+    TopoDS_Compound grid;
+    builder.MakeCompound(grid);
+    const Base::Vector3d planeOrigin = n * feat->PlaneOffset.getValue();
+    const double margin = spacing;
+    for (int i = firstLine; i <= lastLine; ++i) {
+        Base::Vector3d lineOrigin = planeOrigin + lineNormal * (i * spacing);
+        Base::Vector3d startPoint = lineOrigin + lineDir * (dirMin - margin);
+        Base::Vector3d endPoint = lineOrigin + lineDir * (dirMax + margin);
+        gp_Pnt start(startPoint.x, startPoint.y, startPoint.z);
+        gp_Pnt end(endPoint.x, endPoint.y, endPoint.z);
+        BRepBuilderAPI_MakeEdge makeEdge(start, end);
+        if (makeEdge.IsDone()) {
+            builder.Add(grid, makeEdge.Edge());
+        }
+    }
+
+    // Intersecting the grid with the section faces trims the lines at outer
+    // boundaries and removes the portions crossing inner wires (holes).
+    FCBRepAlgoAPI_Common common(sectionShape, grid);
+    if (!common.IsDone() || common.Shape().IsNull()) {
+        return;
+    }
+
+    // The Boolean result contains straight OCCT edges. Convert every edge to
+    // a two-point segment terminated by -1 for SoIndexedLineSet.
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> indices;
+    TopTools_IndexedMapOfShape edges;
+    TopExp::MapShapes(common.Shape(), TopAbs_EDGE, edges);
+    points.reserve(static_cast<size_t>(edges.Extent()) * 2);
+    indices.reserve(static_cast<size_t>(edges.Extent()) * 3);
+    for (int i = 1; i <= edges.Extent(); ++i) {
+        TopoDS_Vertex first;
+        TopoDS_Vertex last;
+        TopExp::Vertices(TopoDS::Edge(edges.FindKey(i)), first, last);
+        if (first.IsNull() || last.IsNull()) {
+            continue;
+        }
+        const gp_Pnt p1 = BRep_Tool::Pnt(first);
+        const gp_Pnt p2 = BRep_Tool::Pnt(last);
+        const int32_t index = static_cast<int32_t>(points.size());
+        points.emplace_back(p1.X(), p1.Y(), p1.Z());
+        points.emplace_back(p2.X(), p2.Y(), p2.Z());
+        indices.push_back(index);
+        indices.push_back(index + 1);
+        indices.push_back(-1);
+    }
+
+    if (!points.empty()) {
+        pcHatchCoords->point.setValues(0, static_cast<int>(points.size()), points.data());
+        pcHatchLines->coordIndex.setValues(0, static_cast<int>(indices.size()), indices.data());
+    }
+}
 
 void ViewProviderSectionAnalysis::applyPerSolidColors()
 {
@@ -658,46 +768,9 @@ void ViewProviderSectionAnalysis::setHatching(bool on)
     hatchEnabled = on;
     ShowHatching.setValue(on);
 
-    if (!pcHatchTexture || !pcHatchCoordGen || !pcRoot) {
-        return;
-    }
-
-    if (on) {
-        SoSearchAction sa;
-        sa.setType(SoIndexedFaceSet::getClassTypeId());
-        sa.setInterest(SoSearchAction::FIRST);
-        sa.apply(pcRoot);
-        SoPath* path = sa.getPath();
-        if (path && path->getLength() >= 2) {
-            auto* parent = static_cast<SoSeparator*>(path->getNodeFromTail(1));
-            int faceIdx = parent->findChild(path->getTail());
-            if (faceIdx >= 0 && parent->findChild(pcHatchTexture) < 0) {
-                parent->insertChild(pcHatchTexture, faceIdx);
-                parent->insertChild(pcHatchCoordGen, faceIdx);
-            }
-        }
-    }
-    else {
-        SoSearchAction sa;
-        sa.setNode(pcHatchTexture);
-        sa.setInterest(SoSearchAction::FIRST);
-        sa.apply(pcRoot);
-        SoPath* path = sa.getPath();
-        if (path && path->getLength() >= 2) {
-            auto* parent = static_cast<SoSeparator*>(path->getNodeFromTail(1));
-            parent->removeChild(pcHatchTexture);
-        }
-
-        SoSearchAction sa2;
-        sa2.setNode(pcHatchCoordGen);
-        sa2.setInterest(SoSearchAction::FIRST);
-        sa2.apply(pcRoot);
-        SoPath* path2 = sa2.getPath();
-        if (path2 && path2->getLength() >= 2) {
-            auto* parent = static_cast<SoSeparator*>(path2->getNodeFromTail(1));
-            parent->removeChild(pcHatchCoordGen);
-        }
-        // Clear per-part texture rotations
+    // Geometry remains cached while hidden, so toggling hatching is cheap.
+    if (pcHatchSwitch) {
+        pcHatchSwitch->whichChild = on ? SO_SWITCH_ALL : SO_SWITCH_NONE;
     }
 }
 
@@ -846,7 +919,7 @@ void ViewProviderSectionAnalysis::show()
 {
     installClipPlane();
     updatePlaneVisual();
-    updateHatchProjection();
+    updateHatchGeometry();
     if (usePerSolidColors) {
         applyPerSolidColors();
     }
@@ -882,9 +955,6 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
         // Runs on every gizmo motion and so must stay cheap
         updateClipPlaneEquation();
         updatePlaneVisual();
-        if (prop == &feat->PlaneNormal) {
-            updateHatchProjection();
-        }
     }
 
     // The clipped set follows SourceParts, which execute() rebuilds
@@ -903,6 +973,7 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
         }
         refreshSourceBBoxCache();
         updatePlaneVisual();
+        updateHatchGeometry();
         if (usePerSolidColors) {
             applyPerSolidColors();
         }

@@ -37,8 +37,6 @@ class SoMaterial;
 class SoSeparator;
 class SoShapeHints;
 class SoSwitch;
-class SoTexture2;
-class SoTextureCoordinatePlane;
 
 namespace App
 {
@@ -90,7 +88,7 @@ private:
     void removeClipPlane();
     void updateClipPlaneEquation();
     void updatePlaneVisual();
-    void updateHatchProjection();
+    void updateHatchGeometry();
     void applyPerSolidColors();
 
     /// Cache the source bbox; expensive on large assemblies, so refreshed only
@@ -113,8 +111,9 @@ private:
     SoFaceSet* pcPlaneFaceSet = nullptr;
     SoMaterial* pcPlaneBorderMaterial = nullptr;
     SoIndexedLineSet* pcPlaneBorderLines = nullptr;
-    SoTexture2* pcHatchTexture = nullptr;
-    SoTextureCoordinatePlane* pcHatchCoordGen = nullptr;
+    SoSwitch* pcHatchSwitch = nullptr;
+    SoCoordinate3* pcHatchCoords = nullptr;
+    SoIndexedLineSet* pcHatchLines = nullptr;
     bool clipInstalled = false;
     bool hatchEnabled = true;
     bool usePerSolidColors = false;
