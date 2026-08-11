@@ -106,6 +106,10 @@ int CirclePy::PyInit(PyObject* args, PyObject* kwds)
         )) {
         Base::Vector3d v1 = static_cast<Base::VectorPy*>(pV1)->value();
         Base::Vector3d v2 = static_cast<Base::VectorPy*>(pV2)->value();
+        if (!std::isfinite(dist)) {
+            PyErr_SetString(PyExc_ValueError, "radius must be a finite number");
+            return -1;
+        }
         GC_MakeCircle mc(gp_Pnt(v1.x, v1.y, v1.z), gp_Dir(v2.x, v2.y, v2.z), dist);
         if (!mc.IsDone()) {
             PyErr_SetString(PartExceptionOCCError, gce_ErrorStatusText(mc.Status()));
@@ -185,6 +189,9 @@ Py::Float CirclePy::getRadius() const
 
 void CirclePy::setRadius(Py::Float arg)
 {
+    if (!std::isfinite((double)arg)) {
+        throw Py::ValueError("radius must be a finite number");
+    }
     Handle(Geom_Circle) circle = Handle(Geom_Circle)::DownCast(getGeomCirclePtr()->handle());
     circle->SetRadius((double)arg);
 }

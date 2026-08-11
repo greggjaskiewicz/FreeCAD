@@ -375,6 +375,10 @@ PyObject* SketchObjectPy::addConstraint(PyObject* args)
 
     if (PyObject_TypeCheck(pcObj, &(Sketcher::ConstraintPy::Type))) {
         Sketcher::Constraint* constr = static_cast<Sketcher::ConstraintPy*>(pcObj)->getConstraintPtr();
+        if (!std::isfinite(constr->getValue())) {
+            PyErr_SetString(PyExc_ValueError, "Constraint value must be a finite number");
+            return nullptr;
+        }
         if (!this->getSketchObjectPtr()->evaluateConstraint(constr)) {
             PyErr_SetString(PyExc_IndexError, "Constraint has invalid indexes");
             return nullptr;
@@ -416,6 +420,10 @@ PyObject* SketchObjectPy::addConstraint(PyObject* args)
         }
 
         for (std::vector<Constraint*>::iterator it = values.begin(); it != values.end(); ++it) {
+            if (!std::isfinite((*it)->getValue())) {
+                PyErr_SetString(PyExc_ValueError, "Constraint value must be a finite number");
+                return nullptr;
+            }
             if (!this->getSketchObjectPtr()->evaluateConstraint(*it)) {
                 PyErr_SetString(
                     PyExc_IndexError,

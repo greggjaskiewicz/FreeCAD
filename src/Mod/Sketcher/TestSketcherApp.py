@@ -25,6 +25,7 @@
 
 # Broken-out test modules
 from SketcherTests.TestSketcherSolver import TestSketcherSolver
+from SketcherTests.TestNonFiniteConstraint import TestNonFiniteConstraint
 from SketcherTests.TestSketchFillet import TestSketchFillet
 from SketcherTests.TestSketchExpression import TestSketchExpression
 from SketcherTests.TestSketchValidateCoincidents import TestSketchValidateCoincidents

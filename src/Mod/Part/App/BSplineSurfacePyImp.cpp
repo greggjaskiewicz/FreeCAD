@@ -609,7 +609,7 @@ PyObject* BSplineSurfacePy::setPole(PyObject* args)
     try {
         Handle(Geom_BSplineSurface)
             surf = Handle(Geom_BSplineSurface)::DownCast(getGeometryPtr()->handle());
-        if (weight < 0.0) {
+        if (!std::isfinite(weight) || weight < 0.0) {
             surf->SetPole(uindex, vindex, pnt);
         }
         else {

@@ -193,7 +193,7 @@ PyObject* BezierCurvePy::setPole(PyObject* args)
     try {
         Handle(Geom_BezierCurve)
             curve = Handle(Geom_BezierCurve)::DownCast(getGeometryPtr()->handle());
-        if (weight < 0.0) {
+        if (!std::isfinite(weight) || weight < 0.0) {
             curve->SetPole(index, pnt);
         }
         else {
@@ -282,6 +282,10 @@ PyObject* BezierCurvePy::setWeight(PyObject* args)
     int index;
     double weight;
     if (!PyArg_ParseTuple(args, "id", &index, &weight)) {
+        return nullptr;
+    }
+    if (!std::isfinite(weight)) {
+        PyErr_SetString(PyExc_ValueError, "weight must be a finite number");
         return nullptr;
     }
     try {

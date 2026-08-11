@@ -84,6 +84,9 @@ Py::Float SpherePy::getRadius() const
 
 void SpherePy::setRadius(Py::Float arg)
 {
+    if (!std::isfinite((double)arg)) {
+        throw Py::ValueError("radius must be a finite number");
+    }
     Handle(Geom_SphericalSurface)
         sphere = Handle(Geom_SphericalSurface)::DownCast(getGeomSpherePtr()->handle());
     sphere->SetRadius((double)arg);

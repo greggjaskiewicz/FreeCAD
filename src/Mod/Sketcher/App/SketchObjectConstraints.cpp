@@ -2262,6 +2262,14 @@ void SketchObject::appendConstraintsMsg(const std::vector<int>& vector,
 
 bool SketchObject::evaluateConstraint(const Constraint* constraint) const
 {
+    // A datum that is not a finite number cannot be solved for. setDatum()
+    // already refuses one, but addConstraint() reached the solver unchecked and
+    // left the sketch with a null shape, which then failed downstream far from
+    // the cause.
+    if (!std::isfinite(constraint->getValue())) {
+        return false;
+    }
+
     // if requireXXX,  GeoUndef is treated as an error. If not requireXXX,
     // GeoUndef is accepted. Index range checking is done on everything regardless.
 

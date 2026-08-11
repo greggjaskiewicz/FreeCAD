@@ -74,6 +74,10 @@ set(Part_tests
     parttests/Geom2d_tests.py
     parttests/part_test_objects.py
     parttests/regression_tests.py
+    parttests/TestNonFiniteGuards.py
+    parttests/TestFaceCutHoles.py
+    parttests/TestCompoundFilterPlacement.py
+    parttests/TestNonFiniteInput.py
     parttests/TopoShapeListTest.py
     parttests/ColorPerFaceTest.py
     parttests/ColorTransparencyTest.py

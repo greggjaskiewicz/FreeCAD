@@ -827,8 +827,37 @@ PyObject* TopoShapeFacePy::cutHoles(PyObject* args)
             if (!wires.empty()) {
                 auto f = getTopoDSFace(this);
                 BRepBuilderAPI_MakeFace mkFace(f);
+                // BRepBuilderAPI_MakeFace::Add only subtracts a wire that winds
+                // opposite to the outer one; given the same winding it adds the
+                // area instead and the face comes out invalid. Callers should not
+                // have to know which way round their wire runs, so normalise it.
+                auto planeNormal = [](const TopoDS_Face& face, gp_Dir& dir) {
+                    BRepAdaptor_Surface adapt(face);
+                    if (adapt.GetType() != GeomAbs_Plane) {
+                        return false;
+                    }
+                    dir = adapt.Plane().Axis().Direction();
+                    if (face.Orientation() == TopAbs_REVERSED) {
+                        dir.Reverse();
+                    }
+                    return true;
+                };
+
+                gp_Dir outerDir;
+                const bool outerIsPlanar = planeNormal(f, outerDir);
+
                 for (const auto& wire : wires) {
-                    mkFace.Add(wire);
+                    bool sameWinding = false;
+                    if (outerIsPlanar) {
+                        // built without a surface, so the plane - and thus the
+                        // normal - is derived from the wire's own winding
+                        BRepBuilderAPI_MakeFace mkHole(wire);
+                        gp_Dir holeDir;
+                        if (mkHole.IsDone() && planeNormal(mkHole.Face(), holeDir)) {
+                            sameWinding = holeDir.Dot(outerDir) > 0;
+                        }
+                    }
+                    mkFace.Add(sameWinding ? TopoDS::Wire(wire.Reversed()) : wire);
                 }
                 if (!mkFace.IsDone()) {
                     switch (mkFace.Error()) {

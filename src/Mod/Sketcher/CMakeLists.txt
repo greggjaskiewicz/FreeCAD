@@ -16,6 +16,7 @@ set(Sketcher_TestScripts
     SketcherTests/__init__.py
     SketcherTests/TestSketchFillet.py
     SketcherTests/TestSketcherSolver.py
+    SketcherTests/TestNonFiniteConstraint.py
     SketcherTests/TestSketchExpression.py
     SketcherTests/TestSketchValidateCoincidents.py
     SketcherTests/TestSketchCarbonCopyReverseMapping.py

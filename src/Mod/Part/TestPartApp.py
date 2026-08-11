@@ -37,6 +37,10 @@ from parttests.regression_tests import RegressionTests
 from parttests.TopoShapeListTest import TopoShapeListTest
 from parttests.TopoShapeTest import TopoShapeTest
 from parttests.TestPartMirror import TestPartMirroringRegression
+from parttests.TestNonFiniteGuards import TestNonFiniteGuards
+from parttests.TestFaceCutHoles import TestFaceCutHoles
+from parttests.TestCompoundFilterPlacement import TestCompoundFilterPlacement
+from parttests.TestNonFiniteInput import TestNonFiniteInput
 from parttests.TestFaceMakerUnifiedPlanar import *
 from parttests.TestFaceMakerUnifiedNonPlanar import *
 

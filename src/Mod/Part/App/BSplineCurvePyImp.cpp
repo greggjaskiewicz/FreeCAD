@@ -448,7 +448,7 @@ PyObject* BSplineCurvePy::setPole(PyObject* args)
     try {
         Handle(Geom_BSplineCurve)
             curve = Handle(Geom_BSplineCurve)::DownCast(getGeometryPtr()->handle());
-        if (weight < 0.0) {
+        if (!std::isfinite(weight) || weight < 0.0) {
             curve->SetPole(index, pnt);
         }
         else {
@@ -543,6 +543,10 @@ PyObject* BSplineCurvePy::setWeight(PyObject* args)
     int index;
     double weight;
     if (!PyArg_ParseTuple(args, "id", &index, &weight)) {
+        return nullptr;
+    }
+    if (!std::isfinite(weight)) {
+        PyErr_SetString(PyExc_ValueError, "weight must be a finite number");
         return nullptr;
     }
     try {

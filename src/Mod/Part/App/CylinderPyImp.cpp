@@ -177,6 +177,9 @@ Py::Float CylinderPy::getRadius() const
 
 void CylinderPy::setRadius(Py::Float arg)
 {
+    if (!std::isfinite((double)arg)) {
+        throw Py::ValueError("radius must be a finite number");
+    }
     Handle(Geom_CylindricalSurface)
         cyl = Handle(Geom_CylindricalSurface)::DownCast(getGeomCylinderPtr()->handle());
     cyl->SetRadius((double)arg);

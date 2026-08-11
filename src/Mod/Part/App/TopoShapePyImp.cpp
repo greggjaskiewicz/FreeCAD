@@ -51,6 +51,8 @@
 #include <gp_Trsf.hxx>
 #include <GProp_GProps.hxx>
 #include <HLRAppli_ReflectLines.hxx>
+#include <cmath>
+
 #include <Precision.hxx>
 #include <Poly_Polygon3D.hxx>
 #include <Poly_Triangulation.hxx>
@@ -1134,6 +1136,22 @@ PyObject* TopoShapePy::transformed(PyObject* args, PyObject* keywds) const
     PY_CATCH_OCC
 }
 
+namespace
+{
+// A guard written as "value < tolerance" does not reject NaN, because every
+// comparison against NaN is false. The value then reaches OCCT, which for
+// scaling never returns at all. Prove the value good instead.
+bool isFinite(double v)
+{
+    return std::isfinite(v);
+}
+
+bool isFinite(const Base::Vector3d& v)
+{
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+}  // namespace
+
 PyObject* TopoShapePy::translate(PyObject* args)
 {
     PyObject* obj;
@@ -1153,6 +1171,11 @@ PyObject* TopoShapePy::translate(PyObject* args)
         return nullptr;
     }
 
+    if (!isFinite(vec)) {
+        PyErr_SetString(PyExc_ValueError, "translation must have finite coordinates");
+        return nullptr;
+    }
+
     gp_Trsf mov;
     mov.SetTranslation(gp_Vec(vec.x, vec.y, vec.z));
     TopLoc_Location loc(mov);
@@ -1168,6 +1191,10 @@ PyObject* TopoShapePy::rotate(PyObject* args)
     PyObject *obj1, *obj2;
     double angle;
     if (!PyArg_ParseTuple(args, "OOd", &obj1, &obj2, &angle)) {
+        return nullptr;
+    }
+    if (!isFinite(angle)) {
+        PyErr_SetString(PyExc_ValueError, "rotation angle must be a finite number");
         return nullptr;
     }
 
@@ -1208,6 +1235,10 @@ PyObject* TopoShapePy::scale(PyObject* args)
         pos.SetX(pnt.x);
         pos.SetY(pnt.y);
         pos.SetZ(pnt.z);
+    }
+    if (!isFinite(factor)) {
+        PyErr_SetString(PyExc_ValueError, "scale factor must be a finite number");
+        return nullptr;
     }
     if (fabs(factor) < Precision::Confusion()) {
         PyErr_SetString(PyExc_ValueError, "scale factor too small");

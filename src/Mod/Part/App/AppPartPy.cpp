@@ -55,6 +55,8 @@
 #include <GeomFill_SectionGenerator.hxx>
 #include <Interface_Static.hxx>
 #include <NCollection_List.hxx>
+#include <cmath>
+
 #include <Precision.hxx>
 #include <ShapeFix.hxx>
 #include <ShapeBuild_ReShape.hxx>
@@ -1378,10 +1380,10 @@ private:
             throw Py::Exception();
         }
 
-        if (length < Precision::Confusion()) {
+        if (!std::isfinite(length) || length < Precision::Confusion()) {
             throw Py::ValueError("length of plane too small");
         }
-        if (width < Precision::Confusion()) {
+        if (!std::isfinite(width) || width < Precision::Confusion()) {
             throw Py::ValueError("width of plane too small");
         }
 
@@ -1435,13 +1437,13 @@ private:
             throw Py::Exception();
         }
 
-        if (length < Precision::Confusion()) {
+        if (!std::isfinite(length) || length < Precision::Confusion()) {
             throw Py::ValueError("length of box too small");
         }
-        if (width < Precision::Confusion()) {
+        if (!std::isfinite(width) || width < Precision::Confusion()) {
             throw Py::ValueError("width of box too small");
         }
-        if (height < Precision::Confusion()) {
+        if (!std::isfinite(height) || height < Precision::Confusion()) {
             throw Py::ValueError("height of box too small");
         }
 
@@ -1494,13 +1496,13 @@ private:
         double dz = zmax - zmin;
         double dz2 = z2max - z2min;
         double dx2 = x2max - x2min;
-        if (dx < Precision::Confusion()) {
+        if (!std::isfinite(dx) || dx < Precision::Confusion()) {
             throw Py::ValueError("delta x of wedge too small");
         }
-        if (dy < Precision::Confusion()) {
+        if (!std::isfinite(dy) || dy < Precision::Confusion()) {
             throw Py::ValueError("delta y of wedge too small");
         }
-        if (dz < Precision::Confusion()) {
+        if (!std::isfinite(dz) || dz < Precision::Confusion()) {
             throw Py::ValueError("delta z of wedge too small");
         }
         if (dz2 < 0) {
@@ -1558,6 +1560,9 @@ private:
             throw Py::TypeError("second argument must either be vector or tuple");
         }
 
+        requireFinite(pnt1, "first point");
+        requireFinite(pnt2, "second point");
+
         // Create directly the underlying line geometry
         BRepBuilderAPI_MakeEdge makeEdge(gp_Pnt(pnt1.x, pnt1.y, pnt1.z), gp_Pnt(pnt2.x, pnt2.y, pnt2.z));
 
@@ -1606,6 +1611,7 @@ private:
             for (Py::Sequence::iterator it = list.begin(); it != list.end(); ++it) {
                 if (PyObject_TypeCheck((*it).ptr(), &(Base::VectorPy::Type))) {
                     Base::Vector3d v = static_cast<Base::VectorPy*>((*it).ptr())->value();
+                    requireFinite(v, "polygon point");
                     mkPoly.Add(gp_Pnt(v.x, v.y, v.z));
                 }
                 else if (PyObject_TypeCheck((*it).ptr(), &PyTuple_Type)) {
@@ -1650,6 +1656,8 @@ private:
             )) {
             throw Py::Exception();
         }
+        requireFinite(radius, "radius");
+
 
         try {
             gp_Pnt loc(0, 0, 0);
@@ -1698,6 +1706,8 @@ private:
             )) {
             throw Py::Exception();
         }
+        requireFinite(radius, "radius");
+
 
         try {
             gp_Pnt p(0, 0, 0);
@@ -1724,6 +1734,25 @@ private:
             throw Py::Exception(PartExceptionOCCDomainError, "creation of sphere failed");
         }
     }
+
+// Reject values that are not finite. Every comparison against NaN is false, so
+// a plain "value < tolerance" guard lets NaN through into OCCT, which then
+// builds a shape carrying NaN coordinates - sometimes one that reports itself
+// valid. Zero and negative handling is deliberately left alone here.
+    static void requireFinite(double value, const char* what)
+    {
+        if (!std::isfinite(value)) {
+            throw Py::ValueError(std::string(what) + " must be a finite number");
+    }
+    }
+
+    static void requireFinite(const Base::Vector3d& v, const char* what)
+    {
+        if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) {
+            throw Py::ValueError(std::string(what) + " must have finite coordinates");
+        }
+    }
+
     Py::Object makeCylinder(const Py::Tuple& args)
     {
         double radius, height, angle = 360;
@@ -1741,6 +1770,9 @@ private:
             )) {
             throw Py::Exception();
         }
+        requireFinite(radius, "radius");
+        requireFinite(height, "height");
+
 
         try {
             gp_Pnt p(0, 0, 0);
@@ -1779,6 +1811,10 @@ private:
             )) {
             throw Py::Exception();
         }
+        requireFinite(radius1, "radius1");
+        requireFinite(radius2, "radius2");
+        requireFinite(height, "height");
+
 
         try {
             gp_Pnt p(0, 0, 0);
@@ -1819,6 +1855,9 @@ private:
             )) {
             throw Py::Exception();
         }
+        requireFinite(radius1, "radius1");
+        requireFinite(radius2, "radius2");
+
 
         try {
             gp_Pnt p(0, 0, 0);
