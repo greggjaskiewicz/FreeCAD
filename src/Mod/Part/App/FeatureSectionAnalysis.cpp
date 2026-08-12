@@ -21,6 +21,7 @@
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
@@ -460,8 +461,27 @@ App::DocumentObjectExecReturn* SectionAnalysis::execute()
         const TopoDS_Shape& currentSolid = solidEntry.first;
         const size_t facesBefore = sectionFaces.size();
 
+        // A solid the plane never reaches cannot contribute a cap, and both the
+        // section and the half-space fallback below are expensive. Rejecting on
+        // the bounding box first costs microseconds and skips most of the solids
+        // in an assembly.
+        Bnd_Box solidBox;
+        BRepBndLib::Add(currentSolid, solidBox, false);
+        if (!solidBox.IsVoid() && solidBox.IsOut(slicePlane)) {
+            faceSourceIdx.resize(sectionFaces.size(), sourceIndex(solidEntry.second));
+            continue;
+        }
         try {
-            BRepAlgoAPI_Section cs(currentSolid, slicePlane);
+            BRepAlgoAPI_Section cs;
+            cs.Init1(currentSolid);
+            cs.Init2(slicePlane);
+            // Oriented bounding boxes let the boolean reject non-intersecting
+            // sub-shapes far more aggressively than the default axis-aligned
+            // test. On a real assembly this is worth about 5x. RunParallel uses
+            // the spare cores for the solids that genuinely have to be cut.
+            cs.SetUseOBB(true);
+            cs.SetRunParallel(true);
+            cs.Build();
             if (cs.IsDone()) {
                 Handle(TopTools_HSequenceOfShape) hEdges = new TopTools_HSequenceOfShape();
                 TopExp_Explorer edgeXp;

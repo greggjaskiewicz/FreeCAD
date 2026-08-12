@@ -23,6 +23,7 @@ add_executable(Part_tests_run
         PartFeature.cpp
         PartFeatures.cpp
         PartTestHelpers.cpp
+        SectionCap.cpp
         PropertyTopoShape.cpp
         TopoDS_Shape.cpp
         TopoShape.cpp
