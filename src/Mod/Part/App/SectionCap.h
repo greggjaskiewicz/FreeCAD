@@ -23,6 +23,7 @@
 
 #include <vector>
 
+#include <Base/BoundBox.h>
 #include <Base/Vector3D.h>
 
 #include <Mod/Part/PartGlobal.h>
@@ -62,11 +63,26 @@ struct TriangleSoup
     std::vector<int> indices;
 };
 
-/// Every place the plane crosses a triangle, as an unordered segment list.
+/// Where the plane crosses one triangle, if it crosses at all.
 ///
 /// Uses a half open sign test, so a triangle yields exactly zero or two
 /// crossings and a vertex lying on the plane cannot produce a duplicate or a
-/// dangling segment.
+/// dangling segment. Returns false when the triangle does not cross, including
+/// the case of one vertex merely resting on the plane.
+///
+/// Exposed per triangle so the viewer can slice while it walks the scene graph,
+/// without first copying every triangle into a soup - on a large assembly that
+/// copy is hundreds of megabytes and dominates the cost.
+PartExport bool sliceTriangle(
+    const Base::Vector3d& a,
+    const Base::Vector3d& b,
+    const Base::Vector3d& c,
+    const Base::Vector3d& normal,
+    double offset,
+    Segment& out
+);
+
+/// Every place the plane crosses a triangle, as an unordered segment list.
 PartExport std::vector<Segment>
 sliceTriangles(const TriangleSoup& soup, const Base::Vector3d& normal, double offset);
 
@@ -79,15 +95,54 @@ sliceTriangles(const TriangleSoup& soup, const Base::Vector3d& normal, double of
 PartExport std::vector<std::vector<Base::Vector3d>>
 chainLoops(const std::vector<Segment>& segments, double tolerance);
 
+/// A solid cap covering the region enclosed by `loops`, as triangles.
+///
+/// Uses the same scanline parity as `hatchLoops`, so holes are excluded without
+/// ever being identified as holes - which is what makes this possible without a
+/// polygon triangulator. The region is tiled by `steps` strips across, each
+/// strip emitting one quad per span, so adjacent strips meet exactly and leave
+/// no gaps. The boundary is therefore a staircase of that step size; the cap is
+/// drawn with its outline on top, which covers it.
+///
+/// Without this the section is see-through and you look into the inside of the
+/// body you just cut.
+PartExport TriangleSoup fillLoops(
+    const std::vector<std::vector<Base::Vector3d>>& loops,
+    const Base::Vector3d& u,
+    const Base::Vector3d& v,
+    int steps
+);
+
+/// The box's extent projected onto `normal`, so a plane that misses a body can
+/// be rejected without visiting a triangle. False when the box is void.
+///
+/// Takes the bounding box rather than the soup so this stays O(1). The caller
+/// measures the box once, when the triangles are harvested; walking every point
+/// again on each plane move is the very cost the rejection exists to avoid.
+/// The box is a conservative hull, so the rejection is conservative too: a
+/// plane it fails to reject simply slices to nothing.
+PartExport bool
+extentAlong(const Base::BoundBox3d& bounds, const Base::Vector3d& normal, double& lo, double& hi);
+
 /// True if the loop's first and last point meet within `tolerance`.
 PartExport bool isClosed(const std::vector<Base::Vector3d>& loop, double tolerance);
 
-/// Signed area of a loop projected onto the plane, using the frame's axes.
-/// Positive means counter clockwise about `normal`; holes come out negative,
-/// which is how outer boundaries are told from inner ones.
-PartExport double signedArea(
-    const std::vector<Base::Vector3d>& loop,
-    const Base::Vector3d& normal
+/// Hatch lines filling the region enclosed by `loops`, spaced `spacing` apart
+/// and running at `angleRad` within the plane's own frame.
+///
+/// This is a scanline fill against the loops themselves, so no triangulation of
+/// the cross section is needed - which matters because triangulating a region
+/// with holes is exactly the hard part. Parity along each scanline sorts inside
+/// from outside, so holes are excluded without ever being identified as holes.
+///
+/// `u` and `v` are the in plane axes; loops that do not close are closed
+/// implicitly, since a fill is only meaningful against a closed boundary.
+PartExport std::vector<Segment> hatchLoops(
+    const std::vector<std::vector<Base::Vector3d>>& loops,
+    const Base::Vector3d& u,
+    const Base::Vector3d& v,
+    double spacing,
+    double angleRad
 );
 
 }  // namespace SectionCap

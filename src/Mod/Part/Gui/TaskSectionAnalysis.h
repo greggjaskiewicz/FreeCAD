@@ -23,6 +23,8 @@
 
 #include <memory>
 
+#include <Base/Vector3D.h>
+
 #include <Gui/TaskView/TaskView.h>
 #include <Gui/TaskView/TaskDialog.h>
 
@@ -34,6 +36,9 @@ namespace Gui
 {
 class QuantitySpinBox;
 class ColorButton;
+class GizmoContainer;
+class LinearGizmo;
+class RotationGizmo;
 }  // namespace Gui
 
 namespace Part
@@ -51,6 +56,18 @@ class SectionAnalysisWidget: public QWidget
     Q_OBJECT
 
 public:
+    /// Entries of the preset combo, in order. The index is used to pick the base
+    /// normal and to label the two angle boxes, so it is worth naming rather
+    /// than reading `case 2:` and counting rows in the constructor.
+    enum class Preset
+    {
+        XY = 0,   //!< Z normal
+        XZ = 1,   //!< Y normal
+        YZ = 2,   //!< X normal
+        ViewDirection = 3,
+        Custom = 4,
+    };
+
     explicit SectionAnalysisWidget(
         Part::SectionAnalysis* feature,
         ViewProviderSectionAnalysis* vp,
@@ -67,6 +84,36 @@ public:
 private:
     void setupUi();
     void setupConnections();
+
+    /// Build the drag handles, bound to the spin boxes they edit. This is the
+    /// same arrangement PartDesign uses for pull-plus-tilt features: the gizmos
+    /// drive the spin boxes and the spin boxes drive the feature, so there is
+    /// one path into the plane rather than two.
+    void setupGizmos();
+
+    /// Tell the user the fine-drag modifier exists.
+    ///
+    /// The handles snap coarsely by default, which reads as "the resolution is
+    /// rough" unless something says otherwise. Every other gizmo-driven task
+    /// panel shows this hint, so ours has to as well.
+    void showDraggerHints();
+    void hideDraggerHints();
+
+    /// Re-place the handles after the plane has moved.
+    void setGizmoPositions();
+
+    /// The frame the angle boxes are expressed in: the preset's base normal and
+    /// the two in-plane axes the angles turn about.
+    ///
+    /// Derived from the preset rather than from the current normal, so it holds
+    /// still while the plane is tilted. Both the angle maths and the tilt handles
+    /// read it, because an arc that turns about a different axis than its spin
+    /// box is worse than no handle at all.
+    void presetFrame(
+        Base::Vector3d& baseNormal,
+        Base::Vector3d& tangent1,
+        Base::Vector3d& tangent2
+    ) const;
     void onPresetChanged(int index);
     void onAngle1Changed(double val);
     void onAngle2Changed(double val);
@@ -84,13 +131,28 @@ private:
     QComboBox* presetCombo = nullptr;
     QLabel* angleLabel1 = nullptr;
     QLabel* angleLabel2 = nullptr;
+    Gui::QuantitySpinBox* offsetSpin = nullptr;
     Gui::QuantitySpinBox* angle1Spin = nullptr;
     Gui::QuantitySpinBox* angle2Spin = nullptr;
+
+    std::unique_ptr<Gui::GizmoContainer> gizmoContainer;
+    Gui::LinearGizmo* offsetGizmo = nullptr;
+    /// True while any handle is being dragged. Re-placing a gizmo mid drag moves
+    /// the frame it is projecting the mouse into, so its next reading jumps -
+    /// which feeds back through the spin box and runs away.
+    ///
+    /// Asked of the draggers rather than mirrored in a flag of our own: Coin has
+    /// no abort callback, only a finish on mouse release, so a mirrored flag
+    /// latches for good if a release is ever missed. This cannot go stale.
+    bool anyGizmoDragging() const;
+    Gui::RotationGizmo* tiltGizmo1 = nullptr;
+    Gui::RotationGizmo* tiltGizmo2 = nullptr;
     QCheckBox* flipCheck = nullptr;
     Gui::ColorButton* sectionColorBtn = nullptr;
     QCheckBox* hatchCheck = nullptr;
     QCheckBox* autoHideHatchCheck = nullptr;
     QCheckBox* perSolidColorCheck = nullptr;
+    QCheckBox* ghostCheck = nullptr;
     QCheckBox* showPlaneCheck = nullptr;
     QCheckBox* updateViewCheck = nullptr;
 };

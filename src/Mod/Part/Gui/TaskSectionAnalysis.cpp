@@ -41,6 +41,12 @@
 #include <Gui/CommandT.h>
 #include <Gui/Document.h>
 #include <Gui/QuantitySpinBox.h>
+#include <QSignalBlocker>
+
+#include <numbers>
+
+#include <Precision.hxx>
+
 #include <Base/Console.h>
 #include <Gui/View3DInventor.h>
 #include <Gui/ViewParams.h>
@@ -51,6 +57,13 @@
 #include <Mod/Part/App/PartFeature.h>
 #include <Mod/Part/Gui/ViewProvider.h>
 
+#include <Base/Converter.h>
+#include <Gui/Utilities.h>
+#include <Inventor/draggers/SoDragger.h>
+#include <Gui/InputHint.h>
+#include <Gui/MainWindow.h>
+#include <Gui/Inventor/Draggers/Gizmo.h>
+#include <Gui/Inventor/Draggers/SoLinearDragger.h>
 #include <Gui/Inventor/Draggers/SoRotationDragger.h>
 
 #include "TaskSectionAnalysis.h"
@@ -63,6 +76,29 @@ using namespace PartGui;
 // SectionAnalysisWidget
 // -----------------------------------------------------------------------
 
+namespace
+{
+/// Smallest length or cosine still worth dividing by.
+///
+/// Deliberately not Precision::Confusion(): that is a modelling tolerance in
+/// millimetres, and these quantities are dimensionless - a unit vector's length
+/// and the cosine of an angle. Borrowing a length tolerance for them reads as a
+/// geometric claim that is not being made.
+constexpr double minUnitMagnitude = 1e-10;
+
+/// True when `normal` points along `axis`, either way round.
+///
+/// Spelled out because the alternative - three chained comparisons of each
+/// component against a tolerance - says how the test is done rather than what it
+/// asks, and reads the same for all three axes.
+bool isAlignedWith(const Base::Vector3d& normal, const Base::Vector3d& axis)
+{
+    constexpr double alignmentTolerance = 1e-6;
+    return std::abs(std::abs(normal * axis) - 1.0) < alignmentTolerance;
+}
+}  // namespace
+
+
 SectionAnalysisWidget::SectionAnalysisWidget(
     Part::SectionAnalysis* feat,
     ViewProviderSectionAnalysis* vp,
@@ -74,10 +110,15 @@ SectionAnalysisWidget::SectionAnalysisWidget(
 {
     setupUi();
     setupConnections();
+    setupGizmos();
     onHatchToggled(true);
 }
 
-SectionAnalysisWidget::~SectionAnalysisWidget() = default;
+SectionAnalysisWidget::~SectionAnalysisWidget()
+{
+    // The hint belongs to the panel, so it has to go when the panel does
+    hideDraggerHints();
+}
 
 ViewProviderSectionAnalysis* SectionAnalysisWidget::getViewProvider() const
 {
@@ -109,18 +150,18 @@ void SectionAnalysisWidget::setupUi()
     planeLayout->addWidget(presetCombo, 0, 1);
 
     // Detect current preset from normal
-    Base::Vector3d n = feature->PlaneNormal.getValue();
-    if (std::abs(n.x) < 1e-6 && std::abs(n.y) < 1e-6 && std::abs(std::abs(n.z) - 1.0) < 1e-6) {
-        presetCombo->setCurrentIndex(0);
+    const Base::Vector3d n = feature->PlaneNormal.getValue();
+    if (isAlignedWith(n, Base::Vector3d::UnitZ)) {
+        presetCombo->setCurrentIndex(static_cast<int>(Preset::XY));
     }
-    else if (std::abs(n.x) < 1e-6 && std::abs(std::abs(n.y) - 1.0) < 1e-6 && std::abs(n.z) < 1e-6) {
-        presetCombo->setCurrentIndex(1);
+    else if (isAlignedWith(n, Base::Vector3d::UnitY)) {
+        presetCombo->setCurrentIndex(static_cast<int>(Preset::XZ));
     }
-    else if (std::abs(std::abs(n.x) - 1.0) < 1e-6 && std::abs(n.y) < 1e-6 && std::abs(n.z) < 1e-6) {
-        presetCombo->setCurrentIndex(2);
+    else if (isAlignedWith(n, Base::Vector3d::UnitX)) {
+        presetCombo->setCurrentIndex(static_cast<int>(Preset::YZ));
     }
     else {
-        presetCombo->setCurrentIndex(4);  // Custom
+        presetCombo->setCurrentIndex(static_cast<int>(Preset::Custom));
     }
 
     // Angle adjustments (tilt the plane from the preset orientation)
@@ -165,10 +206,20 @@ void SectionAnalysisWidget::setupUi()
         }
     }
 
-    // Offset is driven by the cutting-plane dragger, not the task panel
+    // Offset along the normal. The arrow gizmo edits this box rather than the
+    // feature, so dragging and typing go through exactly the same path.
+    auto* offsetLabel = new QLabel(tr("Offset:"), this);
+    planeLayout->addWidget(offsetLabel, 3, 0);
+    offsetSpin = new Gui::QuantitySpinBox(this);
+    offsetSpin->setUnit(Base::Unit::Length);
+    offsetSpin->setRange(-1.0e7, 1.0e7);
+    offsetSpin->setSingleStep(1.0);
+    offsetSpin->setValue(feature->PlaneOffset.getValue());
+    planeLayout->addWidget(offsetSpin, 3, 1);
+
     flipCheck = new QCheckBox(tr("Flip Direction"), this);
     flipCheck->setChecked(feature->FlipCut.getValue());
-    planeLayout->addWidget(flipCheck, 5, 0, 1, 2);
+    planeLayout->addWidget(flipCheck, 4, 0, 1, 2);
 
     mainLayout->addWidget(planeGroup);
 
@@ -204,12 +255,31 @@ void SectionAnalysisWidget::setupUi()
     perSolidColorCheck->setChecked(viewProvider->PerBodyColors.getValue());
     // Nothing to tell apart below two bodies, and while it is on the single
     // colour picker would overwrite the per-body colours it assigns
-    perSolidColorCheck->setEnabled(feature->SourceParts.getValues().size() > 1);
+    // Counted from the source recursion rather than read off SourceParts, which
+    // Display mode leaves empty by design - so this was permanently greyed out
+    // in the default mode. It still showed ticked, because PerBodyColors is a
+    // separate view property the cap reads directly, so setting it from the
+    // property editor worked while the panel insisted it could not be changed.
+    perSolidColorCheck->setEnabled(
+        Part::SectionAnalysis::distinctSourceParts(feature->Source.getValues(), feature).size() > 1
+    );
     if (!perSolidColorCheck->isEnabled()) {
         perSolidColorCheck->setToolTip(tr("The section only comes from a single body"));
     }
     sectionColorBtn->setEnabled(!perSolidColorCheck->isChecked());
     appearLayout->addWidget(perSolidColorCheck, 2, 0, 1, 2);
+
+    ghostCheck = new QCheckBox(tr("Show Removed Material"), this);
+    ghostCheck->setToolTip(
+        tr("Draw the material the section removes faintly, so the\n"
+           "cross-sections have something to sit in")
+    );
+    ghostCheck->setChecked(viewProvider->ShowGhost.getValue());
+    // Row and span given, like every other row here. The one argument overload
+    // is QLayout's, and on a grid it drops the widget in a cell of its own
+    // choosing spanning a single column - which is neither where this reads as
+    // going nor the full width its siblings get.
+    appearLayout->addWidget(ghostCheck, 5, 0, 1, 2);
 
     showPlaneCheck = new QCheckBox(tr("Show Cutting Plane"), this);
     showPlaneCheck->setChecked(true);
@@ -224,6 +294,189 @@ void SectionAnalysisWidget::setupUi()
 
     mainLayout->addStretch();
 }
+
+
+void SectionAnalysisWidget::setupGizmos()
+{
+    // Respect the user's preference, exactly as the other features do
+    if (!Gui::GizmoContainer::isEnabled()) {
+        return;
+    }
+
+    // One handle per degree of freedom the plane actually has: slide along the
+    // normal, and tilt about the two axes lying in it. Each is bound to the box
+    // that already owns that number.
+    offsetGizmo = new Gui::LinearGizmo(offsetSpin);
+    tiltGizmo1 = new Gui::RotationGizmo(angle1Spin);
+    tiltGizmo2 = new Gui::RotationGizmo(angle2Spin);
+
+    // Emphatically NOT automaticOrientation: that re-aims the arc's rotation
+    // axis at the camera on every view change, which is right for a handle that
+    // spins about its own pointer (Pad's taper angle) but wrong here. Each of
+    // our arcs turns the plane about one fixed in-plane axis, the one its spin
+    // box owns, and letting the camera redefine that axis makes the handle
+    // rotate about something arbitrary.
+    tiltGizmo1->automaticOrientation = false;
+    tiltGizmo2->automaticOrientation = false;
+
+    gizmoContainer = Gui::GizmoContainer::create(
+        {offsetGizmo, tiltGizmo1, tiltGizmo2},
+        viewProvider
+    );
+
+    // After create(), because initDragger() applies the theme colours and would
+    // otherwise overwrite these. Two arcs in one colour are indistinguishable,
+    // so each takes the colour of the axis it turns about.
+    auto axisColor = [](unsigned long packed) {
+        SbColor colour;
+        float transparency = 0.0F;
+        colour.setPackedValue(packed, transparency);
+        return colour;
+    };
+    const auto* viewParams = Gui::ViewParams::instance();
+    tiltGizmo1->getDraggerContainer()->color.setValue(axisColor(viewParams->getAxisXColor()));
+    tiltGizmo1->getDraggerContainer()->getDragger()->color = axisColor(viewParams->getAxisXColor());
+    tiltGizmo2->getDraggerContainer()->color.setValue(axisColor(viewParams->getAxisYColor()));
+    tiltGizmo2->getDraggerContainer()->getDragger()->color = axisColor(viewParams->getAxisYColor());
+
+    // A released handle needs one placement to settle; whether a drag is in
+    // progress is asked of the draggers themselves, not tracked here.
+    auto placeOnRelease = [this](SoDragger* dragger) {
+        if (dragger) {
+            dragger->addFinishCallback(
+                [](void* data, SoDragger*) {
+                    static_cast<SectionAnalysisWidget*>(data)->setGizmoPositions();
+                },
+                this
+            );
+        }
+    };
+    placeOnRelease(offsetGizmo->getDraggerContainer()->getDragger());
+    placeOnRelease(tiltGizmo1->getDraggerContainer()->getDragger());
+    placeOnRelease(tiltGizmo2->getDraggerContainer()->getDragger());
+
+    // RotationGizmo defaults to 1 degree steps, which reads as jerky when you
+    // are aiming a section plane by eye. Match the spin box's own 0.1 degree
+    // step so dragging and typing have the same resolution.
+    constexpr double tiltStepDegrees = 0.1;
+    for (Gui::RotationGizmo* tilt : {tiltGizmo1, tiltGizmo2}) {
+        tilt->getDraggerContainer()->getDragger()->rotationIncrement =
+            tiltStepDegrees * std::numbers::pi / 180.0;
+    }
+
+    setGizmoPositions();
+
+    // Paired with the hideDraggerHints() in the destructor. There are handles on
+    // screen from here on, and the modifier that makes them drag finely is not
+    // discoverable without being told.
+    showDraggerHints();
+}
+
+
+void SectionAnalysisWidget::showDraggerHints()
+{
+    if (!Gui::GizmoContainer::isEnabled() || !Gui::GizmoContainer::isCoarseSnapEnabled()) {
+        return;
+    }
+
+    const Gui::InputHint::UserInput key = Gui::GizmoContainer::getFineSnapKey();
+    const QString message = Gui::GizmoContainer::isCoarseByDefault()
+        ? tr("%1 fine dragging")
+        : tr("%1 coarse dragging");
+
+    Gui::getMainWindow()->showHints({{
+        .message = message,
+        .sequences = {{key}},
+    }});
+}
+
+
+void SectionAnalysisWidget::hideDraggerHints()
+{
+    Gui::getMainWindow()->hideHints();
+}
+
+
+bool SectionAnalysisWidget::anyGizmoDragging() const
+{
+    const SoDragger* draggers[] = {
+        offsetGizmo ? offsetGizmo->getDraggerContainer()->getDragger() : nullptr,
+        tiltGizmo1 ? tiltGizmo1->getDraggerContainer()->getDragger() : nullptr,
+        tiltGizmo2 ? tiltGizmo2->getDraggerContainer()->getDragger() : nullptr,
+    };
+    for (const SoDragger* dragger : draggers) {
+        if (dragger && dragger->isActive.getValue()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+void SectionAnalysisWidget::setGizmoPositions()
+{
+    if (!gizmoContainer || !offsetGizmo || anyGizmoDragging()) {
+        return;
+    }
+
+    Base::Vector3d normal;
+    double offset = 0.0;
+    if (!feature->cutPlane(normal, offset)) {
+        return;
+    }
+
+    // Anchored on the geometry rather than on the plane's closest approach to
+    // the world origin, which on an imported assembly is nowhere near the model.
+    Bnd_Box bbox;
+    Base::Vector3d hint(0, 0, 0);
+    if (feature->sourceBoundingBox(bbox) && !bbox.IsVoid()) {
+        double xmin = 0;
+        double ymin = 0;
+        double zmin = 0;
+        double xmax = 0;
+        double ymax = 0;
+        double zmax = 0;
+        bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+        hint = Base::Vector3d((xmin + xmax) * 0.5, (ymin + ymax) * 0.5, (zmin + zmax) * 0.5);
+    }
+    const Base::Vector3d anchor = Part::SectionAnalysis::draggerAnchor(normal, offset, hint);
+
+    offsetGizmo->Gizmo::setDraggerPlacement(anchor, normal);
+
+    // Both arcs on the arrow, never below it: "below" means the far side of the
+    // plane along its own normal, which buries a handle in the material being
+    // cut away. They are told apart within the plane instead, by putting their
+    // pivots on the two in-plane axes a quarter turn from each other.
+    tiltGizmo1->placeOverLinearGizmo(offsetGizmo);
+    tiltGizmo2->placeOverLinearGizmo(offsetGizmo);
+
+    // Each arc turns about the axis its own spin box turns about, in the frame
+    // the angles are expressed in. Taking these from the current normal instead
+    // would move the axes as the plane tilts, so the handles would drift and
+    // jump after every change.
+    Base::Vector3d baseNormal;
+    Base::Vector3d tangent1;
+    Base::Vector3d tangent2;
+    presetFrame(baseNormal, tangent1, tangent2);
+    // Pivot first, axis second: setPointerDirection overwrites the container
+    // rotation while setArcNormalDirection composes onto it. Both pivots lie in
+    // the cutting plane, so neither handle ends up behind it.
+    tiltGizmo1->getDraggerContainer()->setPointerDirection(Base::convertTo<SbVec3f>(tangent2));
+    // applyAngles() turns by -angle1 about tangent1, so the arc has to face the
+    // other way for a drag to move the plane the way it is pushed.
+    tiltGizmo1->getDraggerContainer()->setArcNormalDirection(
+        Base::convertTo<SbVec3f>(-tangent1)
+    );
+    tiltGizmo2->getDraggerContainer()->setPointerDirection(Base::convertTo<SbVec3f>(tangent1));
+    tiltGizmo2->getDraggerContainer()->setArcNormalDirection(
+        Base::convertTo<SbVec3f>(tangent2)
+    );
+
+    const bool tiltable = angle1Spin->isEnabled();
+    tiltGizmo1->setVisibility(tiltable);
+    tiltGizmo2->setVisibility(tiltable);
+}
+
 
 void SectionAnalysisWidget::setupConnections()
 {
@@ -245,6 +498,16 @@ void SectionAnalysisWidget::setupConnections()
         this,
         &SectionAnalysisWidget::onAngle2Changed
     );
+    connect(
+        offsetSpin,
+        qOverload<double>(&Gui::QuantitySpinBox::valueChanged),
+        this,
+        [this](double value) {
+            feature->PlaneOffset.setValue(value);
+            setGizmoPositions();
+            recompute();
+        }
+    );
     connect(flipCheck, &QCheckBox::toggled, this, &SectionAnalysisWidget::onFlipToggled);
     connect(sectionColorBtn, &Gui::ColorButton::changed, this, [this]() {
         onSectionColorChanged(sectionColorBtn->color());
@@ -254,6 +517,9 @@ void SectionAnalysisWidget::setupConnections()
         viewProvider->AutoHideHatching.setValue(on);
     });
     connect(perSolidColorCheck, &QCheckBox::toggled, this, &SectionAnalysisWidget::onPerSolidColorToggled);
+    connect(ghostCheck, &QCheckBox::toggled, this, [this](bool on) {
+        viewProvider->ShowGhost.setValue(on);
+    });
     connect(showPlaneCheck, &QCheckBox::toggled, this, &SectionAnalysisWidget::onShowPlaneToggled);
     connect(updateViewCheck, &QCheckBox::toggled, this, &SectionAnalysisWidget::onUpdateViewToggled);
 }
@@ -261,17 +527,17 @@ void SectionAnalysisWidget::setupConnections()
 void SectionAnalysisWidget::onPresetChanged(int index)
 {
     Base::Vector3d normal;
-    switch (index) {
-        case 0:
-            normal = Base::Vector3d(0, 0, 1);
+    switch (static_cast<Preset>(index)) {
+        case Preset::XY:
+            normal = Base::Vector3d::UnitZ;
             break;
-        case 1:
-            normal = Base::Vector3d(0, 1, 0);
+        case Preset::XZ:
+            normal = Base::Vector3d::UnitY;
             break;
-        case 2:
-            normal = Base::Vector3d(1, 0, 0);
+        case Preset::YZ:
+            normal = Base::Vector3d::UnitX;
             break;
-        case 3: {
+        case Preset::ViewDirection: {
             // View Direction: get camera direction
             auto* mdiView = qobject_cast<Gui::View3DInventor*>(
                 Gui::Application::Instance->activeView()
@@ -283,7 +549,7 @@ void SectionAnalysisWidget::onPresetChanged(int index)
                 normal = Base::Vector3d(-vx, -vy, -vz);  // face toward camera
             }
             else {
-                normal = Base::Vector3d(0, 0, 1);
+                normal = Base::Vector3d::UnitZ;
             }
             break;
         }
@@ -299,16 +565,16 @@ void SectionAnalysisWidget::onPresetChanged(int index)
     angle2Spin->setEnabled(true);
 
     // Update angle labels for the selected preset
-    switch (index) {
-        case 0:  // XY (Z normal)
+    switch (static_cast<Preset>(index)) {
+        case Preset::XY:
             angleLabel1->setText(tr("X Angle:"));
             angleLabel2->setText(tr("Y Angle:"));
             break;
-        case 1:  // XZ (Y normal)
+        case Preset::XZ:
             angleLabel1->setText(tr("X Angle:"));
             angleLabel2->setText(tr("Z Angle:"));
             break;
-        case 2:  // YZ (X normal)
+        case Preset::YZ:
             angleLabel1->setText(tr("Y Angle:"));
             angleLabel2->setText(tr("Z Angle:"));
             break;
@@ -319,19 +585,20 @@ void SectionAnalysisWidget::onPresetChanged(int index)
     }
 
     // Reset angles when switching presets
-    angle1Spin->blockSignals(true);
-    angle2Spin->blockSignals(true);
-    angle1Spin->setValue(0.0);
-    angle2Spin->setValue(0.0);
-    angle1Spin->blockSignals(false);
-    angle2Spin->blockSignals(false);
+    {
+        const QSignalBlocker blockAngle1(angle1Spin);
+        const QSignalBlocker blockAngle2(angle2Spin);
+        angle1Spin->setValue(0.0);
+        angle2Spin->setValue(0.0);
+    }
 
     // Auto-flip for presets where default normal faces away from typical viewing
     // View Direction (3) doesn't need flip since we already face toward camera
-    bool needFlip = (index == 1);  // XZ plane (Y normal) typically faces away
-    flipCheck->blockSignals(true);
-    flipCheck->setChecked(needFlip);
-    flipCheck->blockSignals(false);
+    bool needFlip = (static_cast<Preset>(index) == Preset::XZ);
+    {
+        const QSignalBlocker blockFlip(flipCheck);
+        flipCheck->setChecked(needFlip);
+    }
     feature->FlipCut.setValue(needFlip);
 
     feature->PlaneNormal.setValue(normal);
@@ -346,6 +613,17 @@ void SectionAnalysisWidget::onPresetChanged(int index)
         feature->PlaneOffset.setValue(centerProj);
     }
 
+    // The offset box is what the arrow gizmo reads, so it has to follow too
+    {
+        const QSignalBlocker blockOffset(offsetSpin);
+        offsetSpin->setValue(feature->PlaneOffset.getValue());
+    }
+
+    // A preset moves the plane wholesale - new normal, new offset, new frame -
+    // so every handle needs re-placing. Without this they keep the old pose and
+    // only snap into place when one of them is grabbed.
+    setGizmoPositions();
+
     recompute();
 }
 
@@ -359,59 +637,74 @@ void SectionAnalysisWidget::onAngle2Changed(double /*val*/)
     applyAngles();
 }
 
-void SectionAnalysisWidget::applyAngles()
+void SectionAnalysisWidget::presetFrame(
+    Base::Vector3d& baseNormal,
+    Base::Vector3d& tangent1,
+    Base::Vector3d& tangent2
+) const
 {
-    // Get base normal from preset, preserving the sign from the current normal
-    // (e.g., if the feature was created with (-1,0,0), keep the negative sign)
-    Base::Vector3d curN = feature->PlaneNormal.getValue();
-    Base::Vector3d baseNormal;
-    int preset = presetCombo->currentIndex();
-    switch (preset) {
-        case 0: {
-            double sign = (curN.z < 0) ? -1.0 : 1.0;
-            baseNormal = Base::Vector3d(0, 0, sign);
+    // The preset gives the base orientation; the sign is taken from the current
+    // normal so a section created facing -X keeps facing that way.
+    const Base::Vector3d curN = feature->PlaneNormal.getValue();
+    switch (presetCombo->currentIndex()) {
+        case 0:
+            baseNormal = Base::Vector3d(0, 0, (curN.z < 0) ? -1.0 : 1.0);
             break;
-        }
-        case 1: {
-            double sign = (curN.y < 0) ? -1.0 : 1.0;
-            baseNormal = Base::Vector3d(0, sign, 0);
+        case 1:
+            baseNormal = Base::Vector3d(0, (curN.y < 0) ? -1.0 : 1.0, 0);
             break;
-        }
-        case 2: {
-            double sign = (curN.x < 0) ? -1.0 : 1.0;
-            baseNormal = Base::Vector3d(sign, 0, 0);
+        case 2:
+            baseNormal = Base::Vector3d((curN.x < 0) ? -1.0 : 1.0, 0, 0);
             break;
-        }
-        case 3:  // View Direction - use current normal as base
         default: {
-            double len = curN.Length();
-            baseNormal = (len > 1e-10) ? curN / len : Base::Vector3d(0, 0, 1);
+            const double len = curN.Length();
+            baseNormal = (len > minUnitMagnitude) ? curN / len : Base::Vector3d::UnitZ;
             break;
         }
     }
 
-    // Negate X angle to match the gizmo arc drag direction
-    double a1 = -angle1Spin->value().getValue() * M_PI / 180.0;
-    double a2 = angle2Spin->value().getValue() * M_PI / 180.0;
-
-    // Build two tangent axes perpendicular to the base normal.
-    // We rotate around these tangent axes (not global X/Z).
-    Base::Vector3d tangent1, tangent2;
+    // Rotate about world axes lying in the plane, not about an arbitrary frame:
+    // the angles are meant to read as "tilt about X", and the boxes are labelled
+    // that way.
     if (std::abs(baseNormal.z) > 0.9) {
-        // Z normal -> tangent axes are X and Y
-        tangent1 = Base::Vector3d(1, 0, 0);
-        tangent2 = Base::Vector3d(0, 1, 0);
+        tangent1 = Base::Vector3d::UnitX;
+        tangent2 = Base::Vector3d::UnitY;
     }
     else if (std::abs(baseNormal.y) > 0.9) {
-        // Y normal -> tangent axes are X and Z
-        tangent1 = Base::Vector3d(1, 0, 0);
-        tangent2 = Base::Vector3d(0, 0, 1);
+        tangent1 = Base::Vector3d::UnitX;
+        tangent2 = Base::Vector3d::UnitZ;
     }
     else {
-        // X normal -> tangent axes are Y and Z
-        tangent1 = Base::Vector3d(0, 1, 0);
-        tangent2 = Base::Vector3d(0, 0, 1);
+        tangent1 = Base::Vector3d::UnitY;
+        tangent2 = Base::Vector3d::UnitZ;
     }
+}
+
+
+void SectionAnalysisWidget::applyAngles()
+{
+    // Placed again at the end, once the new normal is in the feature
+    struct PlaceOnExit
+    {
+        SectionAnalysisWidget* self;
+        ~PlaceOnExit()
+        {
+            self->setGizmoPositions();
+        }
+    } placeOnExit {this};
+
+    // Negate X angle to match the gizmo arc drag direction
+    double a1 = -angle1Spin->value().getValue() * std::numbers::pi / 180.0;
+    double a2 = angle2Spin->value().getValue() * std::numbers::pi / 180.0;
+
+    // Base normal and tilt axes both come from presetFrame, which is the same
+    // frame the tilt handles are placed in. A second copy of the preset switch
+    // lived here, and a handle turning about a different axis than the box it
+    // drives is worse than no handle at all.
+    Base::Vector3d baseNormal;
+    Base::Vector3d tangent1;
+    Base::Vector3d tangent2;
+    presetFrame(baseNormal, tangent1, tangent2);
 
     // Rodrigues' rotation: rotate baseNormal around tangent1 by a1, then around tangent2 by a2
     auto rodrigues = [](const Base::Vector3d& v, const Base::Vector3d& k, double theta) {
@@ -424,7 +717,7 @@ void SectionAnalysisWidget::applyAngles()
     n = rodrigues(n, tangent2, a2);
 
     double len = n.Length();
-    if (len > 1e-10) {
+    if (len > minUnitMagnitude) {
         n = n / len;
     }
 
@@ -432,18 +725,30 @@ void SectionAnalysisWidget::applyAngles()
     Base::Vector3d oldN = feature->PlaneNormal.getValue();
     double oldD = feature->PlaneOffset.getValue();
     double oldLen = oldN.Length();
-    Base::Vector3d oldPlanePoint = (oldLen > 1e-10) ? (oldN / oldLen) * oldD
+    Base::Vector3d oldPlanePoint = (oldLen > minUnitMagnitude) ? (oldN / oldLen) * oldD
                                                     : Base::Vector3d(0, 0, 0);
     double newOffset = oldPlanePoint.x * n.x + oldPlanePoint.y * n.y + oldPlanePoint.z * n.z;
 
     feature->PlaneNormal.setValue(n);
     feature->PlaneOffset.setValue(newOffset);
+
+    // Tilting moves the offset too - the plane is kept through the same point,
+    // which is a different distance along the new normal. The arrow gizmo drags
+    // this box rather than the feature, so leaving it showing the old number
+    // means the next drag starts from a value the plane no longer has.
+    {
+        const QSignalBlocker blockOffset(offsetSpin);
+        offsetSpin->setValue(newOffset);
+    }
+
     recompute();
 }
 
 void SectionAnalysisWidget::onFlipToggled(bool on)
 {
     feature->FlipCut.setValue(on);
+    // Flipping turns the cut frame around, so the handles have to turn with it
+    setGizmoPositions();
     recompute();
 }
 
@@ -513,9 +818,10 @@ void SectionAnalysisWidget::updateFromFeature()
     Base::Vector3d n = feature->PlaneNormal.getValue();
     bool flip = feature->FlipCut.getValue();
 
-    flipCheck->blockSignals(true);
-    angle1Spin->blockSignals(true);
-    angle2Spin->blockSignals(true);
+    const QSignalBlocker blockFlip(flipCheck);
+    const QSignalBlocker blockAngle1(angle1Spin);
+    const QSignalBlocker blockAngle2(angle2Spin);
+    const QSignalBlocker blockOffset(offsetSpin);
 
     flipCheck->setChecked(flip);
 
@@ -528,9 +834,9 @@ void SectionAnalysisWidget::updateFromFeature()
             Base::Vector3d ne = (n.z < 0) ? -n : n;
             double alpha = std::asin(std::clamp(ne.y, -1.0, 1.0));
             double cosA = std::cos(alpha);
-            double beta = (cosA > 1e-10) ? std::atan2(ne.x, ne.z) : 0.0;
-            angle1Spin->setValue(alpha * 180.0 / M_PI);
-            angle2Spin->setValue(beta * 180.0 / M_PI);
+            double beta = (cosA > minUnitMagnitude) ? std::atan2(ne.x, ne.z) : 0.0;
+            angle1Spin->setValue(alpha * 180.0 / std::numbers::pi);
+            angle2Spin->setValue(beta * 180.0 / std::numbers::pi);
             break;
         }
         case 1: {  // XZ plane (Y normal)
@@ -538,9 +844,9 @@ void SectionAnalysisWidget::updateFromFeature()
             Base::Vector3d ne = (n.y < 0) ? -n : n;
             double alpha = std::asin(std::clamp(-ne.z, -1.0, 1.0));
             double cosA = std::cos(alpha);
-            double beta = (cosA > 1e-10) ? std::atan2(-ne.x, ne.y) : 0.0;
-            angle1Spin->setValue(alpha * 180.0 / M_PI);
-            angle2Spin->setValue(beta * 180.0 / M_PI);
+            double beta = (cosA > minUnitMagnitude) ? std::atan2(-ne.x, ne.y) : 0.0;
+            angle1Spin->setValue(alpha * 180.0 / std::numbers::pi);
+            angle2Spin->setValue(beta * 180.0 / std::numbers::pi);
             break;
         }
         case 2: {  // YZ plane (X normal)
@@ -548,18 +854,20 @@ void SectionAnalysisWidget::updateFromFeature()
             Base::Vector3d ne = (n.x < 0) ? -n : n;
             double alpha = std::asin(std::clamp(ne.z, -1.0, 1.0));
             double cosA = std::cos(alpha);
-            double beta = (cosA > 1e-10) ? std::atan2(ne.y, ne.x) : 0.0;
-            angle1Spin->setValue(alpha * 180.0 / M_PI);
-            angle2Spin->setValue(beta * 180.0 / M_PI);
+            double beta = (cosA > minUnitMagnitude) ? std::atan2(ne.y, ne.x) : 0.0;
+            angle1Spin->setValue(alpha * 180.0 / std::numbers::pi);
+            angle2Spin->setValue(beta * 180.0 / std::numbers::pi);
             break;
         }
         default:
             break;  // Custom/View Direction: leave angles as-is
     }
 
-    angle1Spin->blockSignals(false);
-    angle2Spin->blockSignals(false);
-    flipCheck->blockSignals(false);
+    // The offset box is part of the same picture, and the arrow gizmo reads it
+    offsetSpin->setValue(feature->PlaneOffset.getValue());
+
+    // The plane has moved, so the handles have to follow it
+    setGizmoPositions();
 }
 
 bool SectionAnalysisWidget::accept()

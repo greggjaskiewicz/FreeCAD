@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -32,6 +33,7 @@
 #include <QTimer>
 
 #include <Bnd_Box.hxx>
+#include <Precision.hxx>
 #include <BRepBndLib.hxx>
 
 #include <Inventor/nodes/SoClipPlane.h>
@@ -43,13 +45,25 @@
 #include <Inventor/elements/SoComplexityTypeElement.h>
 #include <Inventor/misc/SoChildList.h>
 #include <Inventor/misc/SoState.h>
+#include <Inventor/nodes/SoIndexedFaceSet.h>
 #include <Inventor/nodes/SoIndexedLineSet.h>
 #include <Inventor/nodes/SoMaterial.h>
 #include <Inventor/nodes/SoMaterialBinding.h>
 #include <Inventor/nodes/SoPickStyle.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/nodes/SoShapeHints.h>
+#include <Inventor/nodes/SoLightModel.h>
+#include <Inventor/nodes/SoPolygonOffset.h>
+#include <Inventor/nodes/SoTransform.h>
 #include <Inventor/nodes/SoSwitch.h>
+#include <Inventor/nodes/SoOrthographicCamera.h>
+#include <Inventor/nodes/SoPerspectiveCamera.h>
+#include <Gui/Inventor/Draggers/SoLinearDragger.h>
+#include <Gui/Inventor/Draggers/SoRotationDragger.h>
+#include <Gui/Inventor/Draggers/SoLinearDraggerGeometry.h>
+#include <Gui/Inventor/Draggers/SoRotationDraggerGeometry.h>
+
+#include <numbers>
 
 #include <App/Application.h>
 #include <App/Document.h>
@@ -57,16 +71,22 @@
 #include <App/GeoFeatureGroupExtension.h>
 #include <App/Material.h>
 #include <Base/Console.h>
+#include <Base/Converter.h>
+#include <Base/ServiceProvider.h>
+#include <Gui/Inventor/Draggers/GizmoStyleParameters.h>
 #include <Gui/Application.h>
 #include <Gui/Control.h>
 #include <Gui/Document.h>
 #include <Gui/Inventor/Draggers/SoTransformDragger.h>
 #include <Gui/ViewParams.h>
 #include <Gui/Selection/Selection.h>
+#include <Gui/Utilities.h>
 #include <Gui/View3DInventorViewer.h>
 #include <Gui/ViewProvider.h>
+#include <Gui/ViewProviderGeometryObject.h>
 #include <Mod/Part/App/FeatureSectionAnalysis.h>
 
+#include "SectionCapHarvest.h"
 #include "SoBrepFaceSet.h"
 #include "ViewProviderExt.h"
 #include "ViewProviderSectionAnalysis.h"
@@ -94,6 +114,99 @@ App::Material ViewProviderSectionAnalysis::paletteColor(std::size_t index)
     // Section faces are never transparent, whatever the source body does
     mat.transparency = 0.0f;
     return mat;
+}
+
+App::Material ViewProviderSectionAnalysis::distinctColor(std::size_t index)
+{
+    // The first few come from the palette, so a two or three body section still
+    // gets the colours that were chosen for it by eye.
+    constexpr std::size_t paletteSize = 6;
+    if (index < paletteSize) {
+        return paletteColor(index);
+    }
+
+    // Beyond that, step the hue by the golden ratio. Successive indices land far
+    // apart on the wheel however many there are, which is what cycling a fixed
+    // table cannot do.
+    constexpr double goldenRatioConjugate = 0.618033988749895;
+    const double hue = std::fmod(static_cast<double>(index) * goldenRatioConjugate, 1.0);
+    // Held off full saturation and brightness: fully saturated colours next to
+    // each other are hard to look at across a whole assembly.
+    constexpr double saturation = 0.65;
+    constexpr double value = 0.85;
+
+    const double h = hue * 6.0;
+    const int sector = static_cast<int>(h) % 6;
+    const double f = h - std::floor(h);
+    const double p = value * (1.0 - saturation);
+    const double q = value * (1.0 - saturation * f);
+    const double t = value * (1.0 - saturation * (1.0 - f));
+
+    double r = 0.0;
+    double g = 0.0;
+    double b = 0.0;
+    switch (sector) {
+        case 0: r = value; g = t; b = p; break;
+        case 1: r = q; g = value; b = p; break;
+        case 2: r = p; g = value; b = t; break;
+        case 3: r = p; g = q; b = value; break;
+        case 4: r = t; g = p; b = value; break;
+        default: r = value; g = p; b = q; break;
+    }
+
+    App::Material mat;
+    mat.diffuseColor.set(static_cast<float>(r), static_cast<float>(g), static_cast<float>(b), 0.0F);
+    mat.transparency = 0.0F;
+    return mat;
+}
+
+App::Material
+ViewProviderSectionAnalysis::partColor(const App::DocumentObject* part, std::size_t index)
+{
+    // Read here, at draw time, rather than cached with the triangles - a part's
+    // colour is not a reason to walk the scene graph again.
+    //
+    // It does mean recolouring a part does not repaint the cap on its own:
+    // ShapeAppearance lives on the view provider, and neither document's
+    // signalChangedObject carries view provider properties (the Gui one says so
+    // outright - its property argument is the document object's). The next
+    // rebuild picks the colour up.
+    if (part) {
+        auto* vp = dynamic_cast<Gui::ViewProviderGeometryObject*>(
+            Gui::Application::Instance->getViewProvider(part)
+        );
+        if (vp) {
+            const auto& appearance = vp->ShapeAppearance.getValues();
+            if (!appearance.empty() && !isDefaultShapeColor(appearance.front().diffuseColor)) {
+                App::Material mat = appearance.front();
+                // The cut face is solid whatever the part does - a transparent
+                // cross-section is a hole you can see through, which is the one
+                // thing a section is meant to close up.
+                mat.transparency = 0.0F;
+                return mat;
+            }
+        }
+    }
+    // A part the user has never coloured is still at the default, and so is
+    // every other one - colouring them all identically tells nobody which part
+    // is which. Those get a generated colour instead, so per-part colouring
+    // means something on an assembly that arrived as one flat grey.
+    return distinctColor(index);
+}
+
+bool ViewProviderSectionAnalysis::isDefaultShapeColor(const Base::Color& colour)
+{
+    Base::Color fallback;
+    fallback.setPackedValue(
+        static_cast<uint32_t>(Gui::ViewParams::instance()->getDefaultShapeColor())
+    );
+
+    // Compared loosely: the default arrives as 8 bit channels and comes back as
+    // floats, so exact equality would never hold.
+    constexpr float tolerance = 1.0F / 255.0F;
+    return std::abs(colour.r - fallback.r) <= tolerance
+        && std::abs(colour.g - fallback.g) <= tolerance
+        && std::abs(colour.b - fallback.b) <= tolerance;
 }
 
 // Fade-out steps for the hatching, from crisp to nearly gone: the transparency
@@ -183,6 +296,29 @@ ViewProviderSectionAnalysis::ViewProviderSectionAnalysis()
         "Section Analysis",
         App::Prop_None,
         "Use source body colors for cross-section faces"
+    );
+
+    ADD_PROPERTY_TYPE(
+        ShowGhost,
+        (false),
+        "Section Analysis",
+        App::Prop_None,
+        "Show the cut-away material faintly, so the section has context"
+    );
+    ADD_PROPERTY_TYPE(
+        GhostTransparency,
+        (97),
+        "Section Analysis",
+        App::Prop_None,
+        "How see-through the removed material is drawn, as a percentage - the\n"
+        "same scale as any other object's Transparency"
+    );
+    ADD_PROPERTY_TYPE(
+        GhostColor,
+        (Base::Color(0.5843F, 0.98823F, 0.8823F)), /// x-ray vision sci-fi colour
+        "Section Analysis",
+        App::Prop_None,
+        "Colour of the cut-away material"
     );
 
     ShapeAppearance.setValues({paletteColor(0)});
@@ -297,8 +433,484 @@ void ViewProviderSectionAnalysis::attach(App::DocumentObject* pcFeat)
                                                                         : SO_SWITCH_NONE;
     pcRoot->addChild(pcHatchSwitch);
 
+    pcCapRoot = new SoSeparator();
+    pcCapRoot->renderCaching = SoSeparator::OFF;
+    pcGhostRoot = new SoSeparator();
+    pcGhostRoot->renderCaching = SoSeparator::OFF;
+    pcGhostSwitch = new SoSwitch();
+    pcGhostSwitch->addChild(pcGhostRoot);
+    pcGhostSwitch->whichChild = SO_SWITCH_NONE;
+    pcRoot->addChild(pcGhostSwitch);
+
+    pcCapSwitch = new SoSwitch();
+    pcCapSwitch->addChild(pcCapRoot);
+    pcCapSwitch->whichChild = Visibility.getValue() ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+    pcRoot->addChild(pcCapSwitch);
+
     updateHatchGeometry();
+    updateCapFromScene();
+    updateGhost();
     updatePlaneVisual();
+}
+
+
+void ViewProviderSectionAnalysis::refreshHarvestCache()
+{
+    if (harvestValid) {
+        return;
+    }
+    harvestCache.clear();
+
+    auto* feat = getObject<Part::SectionAnalysis>();
+    if (!feat) {
+        return;
+    }
+
+    const std::vector<App::DocumentObject*> sources = feat->Source.getValues();
+
+    // One entry per part, using the same recursion - and the same dedup by
+    // object identity - that execute() uses to build SourceParts. Sectioning an
+    // assembly that arrives as a single link used to produce exactly one body,
+    // which left per-part colouring with a single part to colour.
+    const std::vector<App::DocumentObject*> parts =
+        Part::SectionAnalysis::distinctSourceParts(sources, feat);
+
+    SectionCapHarvest::PartOwners owners;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        Gui::ViewProvider* vp = Gui::Application::Instance->getViewProvider(parts[i]);
+        if (vp && vp->getRoot()) {
+            owners.emplace(vp->getRoot(), i);
+        }
+    }
+    if (owners.empty()) {
+        harvestValid = true;
+        return;
+    }
+
+    // Harvested from each source root rather than from each part's own root, so
+    // the containers' placements are still in the accumulated transform. The
+    // split back out to parts happens inside the walk.
+    std::vector<Part::SectionCap::TriangleSoup> soups(parts.size());
+    for (App::DocumentObject* src : sources) {
+        if (!src || src == feat) {
+            continue;
+        }
+        Gui::ViewProvider* vp = Gui::Application::Instance->getViewProvider(src);
+        if (!vp) {
+            continue;
+        }
+        SectionCapHarvest::fromSceneGraph(vp->getRoot(), owners, soups);
+    }
+
+    for (std::size_t i = 0; i < soups.size(); ++i) {
+        auto& soup = soups[i];
+        if (soup.indices.empty()) {
+            continue;
+        }
+        HarvestedBody body;
+        body.source = parts[i];
+        body.bounds = Base::BoundBox3d(soup.points.data(), soup.points.size());
+        body.soup = std::move(soup);
+        harvestCache.push_back(std::move(body));
+    }
+
+    harvestValid = true;
+}
+
+
+
+void ViewProviderSectionAnalysis::updateGhostClipPlane()
+{
+    if (!pcGhostClip) {
+        return;
+    }
+
+    auto* feat = getObject<Part::SectionAnalysis>();
+    Base::Vector3d n;
+    double d = 0.0;
+    if (!feat || !feat->cutPlane(n, d)) {
+        return;
+    }
+
+    // World coordinates, so the plane needs no per object transform. Keeping
+    // the half the section throws away means not negating the normal.
+    pcGhostClip->plane.setValue(SbPlane(
+        SbVec3f(static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z)),
+        SbVec3f(static_cast<float>(n.x * d),
+                static_cast<float>(n.y * d),
+                static_cast<float>(n.z * d))
+    ));
+}
+
+
+void ViewProviderSectionAnalysis::updateGhost()
+{
+    if (!pcGhostRoot || !pcGhostSwitch) {
+        return;
+    }
+    pcGhostRoot->removeAllChildren();
+    pcGhostClip = nullptr;
+    pcGhostSwitch->whichChild = SO_SWITCH_NONE;
+
+    auto* feat = getObject<Part::SectionAnalysis>();
+    if (!feat || !ShowGhost.getValue() || !Visibility.getValue()) {
+        return;
+    }
+
+    Base::Vector3d n;
+    double d = 0.0;
+    if (!feat->cutPlane(n, d)) {
+        return;
+    }
+
+    // Built from our own harvested triangles rather than by referencing each
+    // object's scene graph node.
+    //
+    // Referencing was free, but it gave that node a second parent. Coin caches a
+    // shape's primitives per node rather than per path, and an assembly is full
+    // of App::Links that already share nodes, so the cache could be validated
+    // under one traversal and used under another. That asserted inside
+    // SoIndexedFaceSet::generatePrimitives during a selection render.
+    //
+    // The soup is already in world coordinates, so this also does away with
+    // re-deriving each object's placement - which was guesswork for anything
+    // nested.
+    refreshHarvestCache();
+
+    // A second copy of an assembly's triangles is hundreds of megabytes, so
+    // there is a point past which the ghost is not worth its cost.
+    constexpr std::size_t maxGhostTriangles = 5000000;
+    std::size_t totalTriangles = 0;
+    for (const HarvestedBody& body : harvestCache) {
+        totalTriangles += body.soup.indices.size() / 3;
+    }
+    if (totalTriangles > maxGhostTriangles) {
+        Base::Console().warning(
+            "SectionAnalysis: not drawing the cut-away ghost, %zu triangles is too "
+            "many to copy for a visual aid.\n",
+            totalTriangles
+        );
+        return;
+    }
+
+    // Every body is drawn identically and against the same plane, so all of this
+    // sits above them rather than being repeated per body. That is what leaves a
+    // plane move with exactly one field to write - see updateGhostClipPlane().
+    // Rebuilding these nodes on every drag step meant re-copying the whole
+    // assembly to say nothing more than "the plane moved".
+
+    // Scenery: clicking through to the real object matters more than being
+    // able to select a hint.
+    auto* pickStyle = new SoPickStyle();
+    pickStyle->style = SoPickStyle::UNPICKABLE;
+    pcGhostRoot->addChild(pickStyle);
+
+    pcGhostClip = new SoClipPlane();
+    pcGhostClip->on.setValue(TRUE);
+    pcGhostRoot->addChild(pcGhostClip);
+    updateGhostClipPlane();
+
+    // Drawn the way the rest of FreeCAD draws a preview: one flat colour,
+    // unlit and translucent, so it reads as an overlay rather than as a
+    // second, dimmer model competing with the real one.
+    auto* lightModel = new SoLightModel();
+    lightModel->model = SoLightModel::BASE_COLOR;
+    pcGhostRoot->addChild(lightModel);
+
+    auto* polygonOffset = new SoPolygonOffset();
+    polygonOffset->factor = 1.0F;
+    polygonOffset->units = 1.0F;
+    polygonOffset->on = TRUE;
+    polygonOffset->styles = SoPolygonOffset::FILLED;
+    pcGhostRoot->addChild(polygonOffset);
+
+    auto* material = new SoMaterial();
+    material->diffuseColor.setValue(Base::convertTo<SbColor>(GhostColor.getValue()));
+    material->transparency.setValue(static_cast<float>(GhostTransparency.getValue()) / 100.0F);
+    pcGhostRoot->addChild(material);
+
+    auto* hints = new SoShapeHints();
+    hints->vertexOrdering = SoShapeHints::UNKNOWN_ORDERING;
+    hints->shapeType = SoShapeHints::UNKNOWN_SHAPE_TYPE;
+    pcGhostRoot->addChild(hints);
+
+    std::size_t bodiesDrawn = 0;
+    for (const HarvestedBody& body : harvestCache) {
+        if (body.soup.indices.empty()) {
+            continue;
+        }
+
+        auto* group = new SoSeparator();
+        group->renderCaching = SoSeparator::OFF;
+
+        std::vector<SbVec3f> points;
+        points.reserve(body.soup.points.size());
+        for (const auto& p : body.soup.points) {
+            points.emplace_back(static_cast<float>(p.x),
+                                static_cast<float>(p.y),
+                                static_cast<float>(p.z));
+        }
+        auto* coordinates = new SoCoordinate3();
+        coordinates->point.setNum(static_cast<int>(points.size()));
+        coordinates->point.setValues(0, static_cast<int>(points.size()), points.data());
+        group->addChild(coordinates);
+
+        std::vector<int32_t> faceIndex;
+        faceIndex.reserve(body.soup.indices.size() / 3 * 4);
+        for (std::size_t i = 0; i + 2 < body.soup.indices.size(); i += 3) {
+            faceIndex.push_back(body.soup.indices[i]);
+            faceIndex.push_back(body.soup.indices[i + 1]);
+            faceIndex.push_back(body.soup.indices[i + 2]);
+            faceIndex.push_back(SO_END_FACE_INDEX);
+        }
+        auto* faces = new SoIndexedFaceSet();
+        faces->coordIndex.setNum(static_cast<int>(faceIndex.size()));
+        faces->coordIndex.setValues(0, static_cast<int>(faceIndex.size()), faceIndex.data());
+        group->addChild(faces);
+
+        pcGhostRoot->addChild(group);
+        ++bodiesDrawn;
+    }
+
+    // Counted rather than read off the child count, which is never zero now that
+    // the shared state nodes are added before the bodies are.
+    if (bodiesDrawn > 0) {
+        pcGhostSwitch->whichChild = SO_SWITCH_ALL;
+    }
+}
+
+
+void ViewProviderSectionAnalysis::releaseHarvestCache()
+{
+    harvestCache.clear();
+    harvestCache.shrink_to_fit();  // clear() alone keeps the capacity
+    harvestValid = false;
+}
+
+
+void ViewProviderSectionAnalysis::updateCapFromScene()
+{
+    if (!pcCapRoot) {
+        return;
+    }
+    pcCapRoot->removeAllChildren();
+
+    auto* feat = getObject<Part::SectionAnalysis>();
+    // In Geometry mode the cap is real B-rep faces drawn the usual way, and
+    // drawing it twice would only z-fight with itself.
+    if (!feat || feat->wantsSolidGeometry()) {
+        // Geometry mode draws real B-rep faces, so the harvested triangles are
+        // dead weight until the user comes back to Display.
+        releaseHarvestCache();
+        return;
+    }
+
+    if (pcCapSwitch) {
+        pcCapSwitch->whichChild = Visibility.getValue() ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+    }
+
+    Base::Vector3d n;
+    double d = 0.0;
+    if (!feat->cutPlane(n, d)) {
+        return;
+    }
+
+    Base::Vector3d u;
+    Base::Vector3d v;
+    Part::SectionAnalysis::planeFrame(n, u, v);
+
+    const double spacing = HatchSpacing.getValue();
+    const bool wantHatch = hatchEnabled && std::isfinite(spacing) && spacing >= minHatchSpacing;
+
+    // Deliberately far looser than Precision::Confusion(). Coin holds vertices
+    // as float, so points on a half metre part agree only to about 1e-4 mm;
+    // chaining at OCCT's 1e-7 would leave every tessellation seam unjoined.
+    constexpr double chainTolerance = 1e-3;
+
+    // Walking the scene graph is most of the cost and does not depend on the
+    // plane, so it is done once and kept.
+    //
+    // The ghost is deliberately not rebuilt from here. It is built from the same
+    // harvest and the callers that invalidate one invalidate the other, so doing
+    // it here only meant doing it twice per plane move - once here and once from
+    // updateData(), which already asks for both.
+    refreshHarvestCache();
+
+    std::size_t index = 0;
+    for (const HarvestedBody& body : harvestCache) {
+        // Reject on the bounding box first. On an assembly this is the
+        // difference between visiting every triangle and visiting almost none,
+        // which only holds because the box was measured at harvest time.
+        double lo = 0.0;
+        double hi = 0.0;
+        if (!Part::SectionCap::extentAlong(body.bounds, n, lo, hi) || d < lo || d > hi) {
+            ++index;
+            continue;
+        }
+
+        const auto segments = Part::SectionCap::sliceTriangles(body.soup, n, d);
+        if (segments.empty()) {
+            ++index;
+            continue;
+        }
+        const auto loops = Part::SectionCap::chainLoops(segments, chainTolerance);
+        if (loops.empty()) {
+            ++index;
+            continue;
+        }
+
+        // The cap surface itself. Without it the section is see-through and you
+        // look into the inside of the body that was just cut.
+        auto* node = new SoSeparator();
+        node->renderCaching = SoSeparator::OFF;
+
+        // Per-part colouring takes each part's own colour, so the section reads
+        // like the model it was cut from; otherwise the whole cap follows the
+        // section's own appearance, so the colour property still means something
+        // in Display mode.
+        const auto& appearance = ShapeAppearance.getValues();
+        const App::Material colour = (usePerSolidColors || appearance.empty())
+            ? partColor(body.source, index)
+            : appearance.front();
+
+        constexpr int fillSteps = 400;
+        const auto fill = Part::SectionCap::fillLoops(loops, u, v, fillSteps);
+        if (!fill.indices.empty()) {
+            std::vector<SbVec3f> fillPoints;
+            fillPoints.reserve(fill.points.size());
+            for (const auto& p : fill.points) {
+                fillPoints.emplace_back(static_cast<float>(p.x),
+                                        static_cast<float>(p.y),
+                                        static_cast<float>(p.z));
+            }
+            std::vector<int32_t> fillIndex;
+            fillIndex.reserve(fill.indices.size() / 3 * 4);
+            for (std::size_t i = 0; i + 2 < fill.indices.size(); i += 3) {
+                fillIndex.push_back(fill.indices[i]);
+                fillIndex.push_back(fill.indices[i + 1]);
+                fillIndex.push_back(fill.indices[i + 2]);
+                fillIndex.push_back(SO_END_FACE_INDEX);
+            }
+
+            auto* fillGroup = new SoSeparator();
+            fillGroup->renderCaching = SoSeparator::OFF;
+
+            // The fill, the outline and the hatching all lie exactly on the
+            // cutting plane, because that is where the section is. Coplanar
+            // filled polygons and lines z-fight, and the fill wins about as
+            // often as it loses - which showed up as a section drawn as a flat
+            // black shape with its hatching and outline missing.
+            //
+            // The fill is pushed back in depth rather than the lines being
+            // lifted along the normal. A lift has to be scaled to the model to
+            // be neither visible nor swallowed by depth precision; the offset is
+            // applied in depth buffer units and so needs no such guess.
+            auto* fillOffset = new SoPolygonOffset();
+            fillOffset->factor = 1.0F;
+            fillOffset->units = 1.0F;
+            fillOffset->on = TRUE;
+            fillOffset->styles = SoPolygonOffset::FILLED;
+            fillGroup->addChild(fillOffset);
+
+            // Two sided: which way the cap faces depends on the cut direction,
+            // and a back facing cap would simply vanish.
+            auto* hints = new SoShapeHints();
+            hints->vertexOrdering = SoShapeHints::UNKNOWN_ORDERING;
+            hints->shapeType = SoShapeHints::UNKNOWN_SHAPE_TYPE;
+            fillGroup->addChild(hints);
+            // The part's own colour, darkened, rather than a flat black. Black
+            // made every cap look identical however the parts were coloured, so
+            // per-part colouring only ever showed in the hatch lines - which is
+            // to say it barely showed at all. Darkened so those lines, drawn in
+            // the full colour on top, still read against it.
+            constexpr float fillDarkening = 0.35F;
+            auto* fillMaterial = new SoMaterial();
+            fillMaterial->diffuseColor.setValue(
+                colour.diffuseColor.r * fillDarkening,
+                colour.diffuseColor.g * fillDarkening,
+                colour.diffuseColor.b * fillDarkening
+            );
+            fillGroup->addChild(fillMaterial);
+            auto* fillCoords = new SoCoordinate3();
+            fillCoords->point.setNum(static_cast<int>(fillPoints.size()));
+            fillCoords->point.setValues(0, static_cast<int>(fillPoints.size()), fillPoints.data());
+            fillGroup->addChild(fillCoords);
+            auto* faces = new SoIndexedFaceSet();
+            faces->coordIndex.setNum(static_cast<int>(fillIndex.size()));
+            faces->coordIndex.setValues(0, static_cast<int>(fillIndex.size()), fillIndex.data());
+            fillGroup->addChild(faces);
+            node->addChild(fillGroup);
+        }
+
+        std::vector<SbVec3f> points;
+        std::vector<int32_t> lineIndex;
+
+        // Outline first, so the cross section reads as a shape even before the
+        // hatching is taken in.
+        for (const auto& loop : loops) {
+            for (const auto& p : loop) {
+                lineIndex.push_back(static_cast<int32_t>(points.size()));
+                points.emplace_back(static_cast<float>(p.x),
+                                    static_cast<float>(p.y),
+                                    static_cast<float>(p.z));
+            }
+            if (Part::SectionCap::isClosed(loop, chainTolerance)) {
+                lineIndex.push_back(lineIndex[lineIndex.size() - loop.size()]);
+            }
+            lineIndex.push_back(SO_END_LINE_INDEX);
+        }
+
+        if (wantHatch) {
+            // A different angle per body, so neighbouring parts stay legible
+            // where their sections meet.
+            const double angle = std::numbers::pi / 4.0 + (std::numbers::pi / 6.0) * (index % 6);
+            const auto hatch = Part::SectionCap::hatchLoops(loops, u, v, spacing, angle);
+            for (const auto& seg : hatch) {
+                lineIndex.push_back(static_cast<int32_t>(points.size()));
+                points.emplace_back(static_cast<float>(seg.start.x),
+                                    static_cast<float>(seg.start.y),
+                                    static_cast<float>(seg.start.z));
+                lineIndex.push_back(static_cast<int32_t>(points.size()));
+                points.emplace_back(static_cast<float>(seg.end.x),
+                                    static_cast<float>(seg.end.y),
+                                    static_cast<float>(seg.end.z));
+                lineIndex.push_back(SO_END_LINE_INDEX);
+            }
+        }
+
+        if (points.empty()) {
+            ++index;
+            continue;
+        }
+
+        // Same colour the fill was darkened from, at full strength, so the
+        // outline and hatching read as belonging to that cap.
+        auto* material = new SoMaterial();
+        material->diffuseColor.setValue(colour.diffuseColor.r,
+                                        colour.diffuseColor.g,
+                                        colour.diffuseColor.b);
+        material->emissiveColor.setValue(colour.diffuseColor.r,
+                                         colour.diffuseColor.g,
+                                         colour.diffuseColor.b);
+        node->addChild(material);
+
+        auto* style = new SoDrawStyle();
+        style->lineWidth = static_cast<float>(HatchLineWidth.getValue());
+        node->addChild(style);
+
+        auto* coords = new SoCoordinate3();
+        coords->point.setNum(static_cast<int>(points.size()));
+        coords->point.setValues(0, static_cast<int>(points.size()), points.data());
+        node->addChild(coords);
+
+        auto* lines = new SoIndexedLineSet();
+        lines->coordIndex.setNum(static_cast<int>(lineIndex.size()));
+        lines->coordIndex.setValues(0, static_cast<int>(lineIndex.size()), lineIndex.data());
+        node->addChild(lines);
+
+        pcCapRoot->addChild(node);
+        ++index;
+    }
 }
 
 void ViewProviderSectionAnalysis::finishRestoring()
@@ -454,7 +1066,14 @@ void ViewProviderSectionAnalysis::slotChangedObject(
 )
 {
     auto* feat = getObject<Part::SectionAnalysis>();
-    if (!feat || &obj == feat || &prop != &obj.Visibility) {
+    if (!feat || &obj == feat) {
+        return;
+    }
+    // Appearing and disappearing changes which triangles exist, being edited
+    // changes what they are, being moved changes where they are. Everything
+    // else leaves the harvest usable.
+    const bool visibilityChanged = &prop == &obj.Visibility;
+    if (!Part::SectionAnalysis::isHarvestStaleAfter(obj, prop)) {
         return;
     }
     if (feat->getDocument()->testStatus(App::Document::Restoring)
@@ -476,6 +1095,19 @@ void ViewProviderSectionAnalysis::slotChangedObject(
         return isAncestorOrSelf(src, &obj) || isAncestorOrSelf(&obj, src);
     });
     if (!related) {
+        return;
+    }
+
+    // Only now is it known the change was to geometry the cap is built from.
+    harvestValid = false;
+
+    // Geometry edits do not move the plane, so there is nothing for the feature
+    // to recompute - the cap just has to be rebuilt from the new triangles. The
+    // ghost is built from the same harvest that was just invalidated, so it goes
+    // stale on exactly the same edits.
+    if (!visibilityChanged) {
+        updateCapFromScene();
+        updateGhost();
         return;
     }
 
@@ -542,7 +1174,7 @@ void ViewProviderSectionAnalysis::updatePlaneVisual()
     Base::Vector3d n = feat->PlaneNormal.getValue();
     double d = feat->PlaneOffset.getValue();
     double len = n.Length();
-    if (len < 1e-10) {
+    if (len < Precision::Confusion()) {
         return;
     }
     n = n / len;
@@ -626,7 +1258,7 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
 
     Base::Vector3d n = feat->PlaneNormal.getValue();
     const double len = n.Length();
-    if (len < 1e-10) {
+    if (len < Precision::Confusion()) {
         return;
     }
     n = n / len;
@@ -643,7 +1275,6 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
 
     // PropertyLength only clamps to >= 0 through the editor, and setValue() from
     // C++ or a restored file bypasses even that, so anything can land here
-    constexpr double minHatchSpacing = 0.001;
     const double spacing = HatchSpacing.getValue();
     if (!std::isfinite(spacing) || spacing < minHatchSpacing) {
         return;
@@ -664,7 +1295,10 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
         const double dz = sourceBBox[5] - sourceBBox[2];
         modelSize = std::max(std::sqrt(dx * dx + dy * dy + dz * dz), 1.0);
     }
-    const Base::Vector3d lift = cutNormal * (modelSize * 1e-4);
+    // Proportional to the model, not a tolerance: enough to clear the section
+    // face in the depth buffer at any scale.
+    constexpr double zFightingLift = 1e-4;
+    const Base::Vector3d lift = cutNormal * (modelSize * zFightingLift);
 
     // Walk the tessellation of the section faces and slice every triangle with
     // the family of hatch lines (marching triangles). Using the triangles the
@@ -892,6 +1526,20 @@ void ViewProviderSectionAnalysis::onChanged(const App::Property* prop)
         }
     }
 
+    // The scene graph cap carries its own hatching and colour, so every one of
+    // these has to reach it too - none of them go through the section Shape.
+    if (prop == &HatchLineWidth || prop == &HatchSpacing || prop == &ShowHatching
+        || prop == &PerBodyColors || prop == &ShapeAppearance) {
+        if (!isRestoring()) {
+            updateCapFromScene();
+        }
+    }
+    if (prop == &ShowGhost || prop == &GhostTransparency || prop == &GhostColor) {
+        if (!isRestoring()) {
+            updateGhost();
+        }
+    }
+
     ViewProviderPart::onChanged(prop);
 }
 
@@ -920,32 +1568,9 @@ void ViewProviderSectionAnalysis::setPerSolidColors(bool on)
 
 void ViewProviderSectionAnalysis::setEditViewer(Gui::View3DInventorViewer* viewer, int ModNum)
 {
-    Q_UNUSED(ModNum);
-    if (!viewer || !transformDragger) {
-        return;
-    }
-
-    transformDragger->setUpAutoScale(viewer->getSoRenderManager()->getCamera());
-
-    // Orient the dragger so Z points out of the cut, away from the material.
-    // Translation along Z = change PlaneOffset.
-    // Rotation around X/Y = change PlaneNormal.
-    // This was tricky to get right
-    Base::Vector3d n;
-    double d = 0.0;
-    if (getCutFrame(n, d)) {
-        Base::Rotation rot(Base::Vector3d(0, 0, 1), n);
-        Base::Matrix4D mat = Base::Placement(n * d, rot).toMatrix();
-
-        viewer->getDocument()->setEditingTransform(mat);
-        viewer->setupEditingRoot(transformDragger, &mat);
-    }
-}
-
-bool ViewProviderSectionAnalysis::getCutFrame(Base::Vector3d& normal, double& offset)
-{
-    auto* feat = getObject<Part::SectionAnalysis>();
-    return feat && feat->cutPlane(normal, offset);
+    // The task panel owns the handles now, and the base class is what puts the
+    // gizmo container into the viewer and keeps it scaled to the camera.
+    ViewProviderDragger::setEditViewer(viewer, ModNum);
 }
 
 void ViewProviderSectionAnalysis::unsetEditViewer(Gui::View3DInventorViewer* viewer)
@@ -955,112 +1580,8 @@ void ViewProviderSectionAnalysis::unsetEditViewer(Gui::View3DInventorViewer* vie
 
 void ViewProviderSectionAnalysis::syncDraggerPlacement()
 {
-    // Only meaningful while editing, and never mid-drag: there the dragger is
-    // the one driving the plane, so resyncing it would fight the drag.
-    if (!transformDragger || draggerInMotion || !getDocument()) {
-        return;
-    }
-
-    Base::Vector3d n;
-    double d = 0.0;
-    if (!getCutFrame(n, d)) {
-        return;
-    }
-
-    Base::Rotation rot(Base::Vector3d(0, 0, 1), n);
-    getDocument()->setEditingTransform(Base::Placement(n * d, rot).toMatrix());
-
-    // The new transform is absolute, so drop whatever offset an earlier drag
-    // left in the dragger itself
-    transformDragger->translation.setValue(0.0f, 0.0f, 0.0f);
-    transformDragger->rotation.setValue(SbRotation::identity());
-    transformDragger->clearIncrementCounts();
-}
-
-void ViewProviderSectionAnalysis::sectionDragStartCallback(void* data, SoDragger*)
-{
-    auto* vp = static_cast<ViewProviderSectionAnalysis*>(data);
-    vp->draggerInMotion = true;
-    vp->transformDragger->clearIncrementCounts();
-
-    // Save the initial plane state, in the same cut frame the dragger sits in
-    Base::Vector3d n;
-    double d = 0.0;
-    if (vp->getCutFrame(n, d)) {
-        Base::Rotation rot(Base::Vector3d(0, 0, 1), n);
-        vp->draggerStartPlacement = Base::Placement(n * d, rot);
-    }
-}
-
-void ViewProviderSectionAnalysis::sectionDragMotionCallback(void* data, SoDragger*)
-{
-    auto* vp = static_cast<ViewProviderSectionAnalysis*>(data);
-    auto* feat = vp->getObject<Part::SectionAnalysis>();
-    if (!feat || !vp->transformDragger) {
-        return;
-    }
-
-    // Read incremental changes from the dragger
-    double transStep = vp->transformDragger->translationIncrement.getValue();
-    int zSteps = vp->transformDragger->translationIncrementCountZ.getValue();
-    double rotStep = vp->transformDragger->rotationIncrement.getValue();
-    int xRotSteps = vp->transformDragger->rotationIncrementCountX.getValue();
-    int yRotSteps = vp->transformDragger->rotationIncrementCountY.getValue();
-
-    // Rotation around the dragger's local X and Y axes
-    Base::Rotation startRot = vp->draggerStartPlacement.getRotation();
-    Base::Rotation deltaRot;
-    if (xRotSteps != 0 || yRotSteps != 0) {
-        Base::Vector3d localX = startRot.multVec(Base::Vector3d(1, 0, 0));
-        Base::Vector3d localY = startRot.multVec(Base::Vector3d(0, 1, 0));
-        Base::Rotation rotX(localX, xRotSteps * rotStep);
-        Base::Rotation rotY(localY, yRotSteps * rotStep);
-        deltaRot = rotY * rotX;
-    }
-
-    const Base::Vector3d startNormal = startRot.multVec(Base::Vector3d(0, 0, 1));
-    const double startOffset = startNormal * vp->draggerStartPlacement.getPosition();
-
-    Base::Vector3d newNormal;
-    double newOffset = 0.0;
-    Part::SectionAnalysis::planeAfterDrag(
-        startNormal,
-        startOffset,
-        deltaRot,
-        zSteps * transStep,
-        newNormal,
-        newOffset
-    );
-
-    // Back out of the cut frame the dragger works in
-    if (feat->FlipCut.getValue()) {
-        newNormal = -newNormal;
-        newOffset = -newOffset;
-    }
-
-    feat->PlaneNormal.setValue(newNormal);
-    feat->PlaneOffset.setValue(newOffset);
-
-    // Sync the task panel UI to reflect dragger changes
-    auto* dlg = qobject_cast<TaskSectionAnalysis*>(Gui::Control().activeDialog());
-    if (dlg) {
-        dlg->updateFromFeature();
-    }
-}
-
-void ViewProviderSectionAnalysis::sectionDragFinishCallback(void* data, SoDragger*)
-{
-    auto* vp = static_cast<ViewProviderSectionAnalysis*>(data);
-    if (vp->transformDragger) {
-        vp->transformDragger->clearIncrementCounts();
-    }
-    vp->draggerInMotion = false;
-
-    // Recompute the section faces once for the final plane pose
-    auto* feat = vp->getObject<Part::SectionAnalysis>();
-    if (feat) {
-        feat->recomputeFeature();
-    }
+    // The handles follow the spin boxes they are bound to, and the task panel
+    // re-places them when the plane moves, so there is nothing to do here.
 }
 
 void ViewProviderSectionAnalysis::show()
@@ -1074,6 +1595,12 @@ void ViewProviderSectionAnalysis::show()
     if (pcPlaneSwitch) {
         pcPlaneSwitch->whichChild = SO_SWITCH_NONE;
     }
+    if (pcCapSwitch) {
+        pcCapSwitch->whichChild = SO_SWITCH_ALL;
+    }
+    updateCapFromScene();
+    // The ghost draws nothing while hidden, so coming back has to build it
+    updateGhost();
     ViewProviderPart::show();
 
     // After the base class, which rebuilds the tessellation the hatching is
@@ -1089,6 +1616,15 @@ void ViewProviderSectionAnalysis::hide()
     }
     if (pcHatchSwitch) {
         pcHatchSwitch->whichChild = SO_SWITCH_NONE;
+    }
+    if (pcCapSwitch) {
+        pcCapSwitch->whichChild = SO_SWITCH_NONE;
+    }
+    // Hiding the section has to hide the hint that goes with it. updateGhost()
+    // already refuses to draw while invisible, but nothing was calling it here,
+    // so the cut-away material stayed on screen after the section went away.
+    if (pcGhostSwitch) {
+        pcGhostSwitch->whichChild = SO_SWITCH_NONE;
     }
     ViewProviderPart::hide();
 }
@@ -1114,16 +1650,45 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
             // towards both follow the plane orientation
             updateHatchGeometry();
         }
+        // The scene graph cap is re-sliced for any plane change, offset
+        // included: unlike the OCCT path there is no shape to wait for.
+        updateCapFromScene();
+        // The ghost's triangles are the same ones whichever way the plane
+        // points, so only the plane it is clipped against has moved. This runs
+        // on every drag step; rebuilding the geometry here meant re-copying the
+        // whole assembly to say nothing more than that.
+        updateGhostClipPlane();
     }
 
     // The clipped set follows SourceParts, which execute() rebuilds
     if (prop == &feat->Source || prop == &feat->SourceParts) {
+        const bool harvestStale =
+            Part::SectionAnalysis::ownPropertyInvalidatesHarvest(feat->getPropertyName(prop));
+        if (harvestStale) {
+            harvestValid = false;
+        }
         removeClipPlane();
         if (Visibility.getValue()) {
             installClipPlane();
         }
         refreshSourceBBoxCache();
         updatePlaneVisual();
+        // Not left to the Shape branch below. In Display mode execute() leaves
+        // Shape null, so sectioning a different set of objects need not change
+        // it at all - and then nothing would rebuild what is drawn.
+        if (harvestStale) {
+            updateCapFromScene();
+            updateGhost();
+        }
+    }
+
+    // Switching between Display and Geometry changes which of the two draws the
+    // cap, and neither publishes anything else to notice. Relying on Shape to
+    // signal it fails outright when the plane misses everything, because Shape
+    // is null in both modes and never changes.
+    if (prop == &feat->ResultMode) {
+        updateCapFromScene();
+        updateGhost();
     }
 
     if (prop == &feat->Shape) {
@@ -1137,6 +1702,7 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
         }
         // New tessellation, so the hatching has to be sliced again
         updateHatchGeometry();
+        updateCapFromScene();
     }
 }
 
@@ -1152,94 +1718,56 @@ bool ViewProviderSectionAnalysis::onDelete(const std::vector<std::string>&)
     return true;
 }
 
+// Edit/cancelEdit workflow. Essentially entry points.
 bool ViewProviderSectionAnalysis::setEdit(int ModNum)
 {
-    if (ModNum == ViewProvider::Default) {
-        Gui::TaskView::TaskDialog* dlg = Gui::Control().activeDialog(getDocument()->getDocument());
-        TaskSectionAnalysis* saDlg = qobject_cast<TaskSectionAnalysis*>(dlg);
-        if (saDlg && saDlg->getObject() != this->getObject()) {
-            saDlg = nullptr;
-        }
-        if (dlg && !saDlg) {
-            if (dlg->canClose()) {
-                Gui::Control().closeDialog(getDocument()->getDocument());
-            }
-            else {
-                return false;
-            }
-        }
-
-        Gui::Selection().clearSelection();
-
-        // Show the cutting plane visual when entering edit mode
-        if (pcPlaneSwitch) {
-            pcPlaneSwitch->whichChild = SO_SWITCH_ALL;
-        }
-
-        // Create the Transform dragger - configured for section plane DOF:
-        // Z translation (offset along normal) + X/Y rotation (tilt)
-        if (!transformDragger) {
-            transformDragger = new Gui::SoTransformDragger();
-            transformDragger->setAxisColors(
-                Gui::ViewParams::instance()->getAxisXColor(),
-                Gui::ViewParams::instance()->getAxisYColor(),
-                Gui::ViewParams::instance()->getAxisZColor()
-            );
-            transformDragger->draggerSize.setValue(Gui::ViewParams::instance()->getDraggerScale());
-
-            // Hide axis labels - not meaningful for section plane
-            transformDragger->xAxisLabel.setValue("");
-            transformDragger->yAxisLabel.setValue("");
-            transformDragger->zAxisLabel.setValue("");
-
-            // Finer increments for section plane manipulation
-            transformDragger->translationIncrement.setValue(0.1);        // 0.1mm steps
-            transformDragger->rotationIncrement.setValue(M_PI / 180.0);  // 1 deg steps
-
-            // Section plane: only Z translation + X/Y rotation
-            transformDragger->hideTranslationX();
-            transformDragger->hideTranslationY();
-            transformDragger->showTranslationZ();
-            transformDragger->showRotationX();
-            transformDragger->showRotationY();
-            transformDragger->hideRotationZ();
-            transformDragger->hidePlanarTranslationXY();
-            transformDragger->hidePlanarTranslationYZ();
-            transformDragger->hidePlanarTranslationZX();
-
-            transformDragger->addStartCallback(sectionDragStartCallback, this);
-            transformDragger->addFinishCallback(sectionDragFinishCallback, this);
-            transformDragger->addMotionCallback(sectionDragMotionCallback, this);
-        }
-
-        if (saDlg) {
-            Gui::Control().showDialog(saDlg, getDocument()->getDocument());
-        }
-        else {
-            Gui::Control().showDialog(
-                new TaskSectionAnalysis(getObject<Part::SectionAnalysis>(), this),
-                getDocument()->getDocument()
-            );
-        }
-
-        return true;
-    }
-    else {
+    // We only support default mode
+    if (ModNum != ViewProvider::Default) {
         return ViewProviderPart::setEdit(ModNum);
     }
+
+    auto* dlg = Gui::Control().activeDialog(getDocument()->getDocument());
+    auto* section = qobject_cast<TaskSectionAnalysis*>(dlg);
+
+    // Reusable only if it is already editing this same section
+    auto* reusable = (section && section->getObject() == this->getObject()) ? section : nullptr;
+
+    if (dlg && !reusable) {
+        if (!dlg->canClose()) {
+            return false;
+        }
+        Gui::Control().closeDialog(getDocument()->getDocument());
+    }
+
+    Gui::Selection().clearSelection();
+
+    // Show the cutting plane visual when entering edit mode
+    if (pcPlaneSwitch) {
+        pcPlaneSwitch->whichChild = SO_SWITCH_ALL;
+    }
+
+    if (reusable) {
+        Gui::Control().showDialog(reusable, getDocument()->getDocument());
+    }
+    else {
+        Gui::Control().showDialog(
+            new TaskSectionAnalysis(getObject<Part::SectionAnalysis>(), this),
+            getDocument()->getDocument()
+        );
+    }
+
+    return true;
 }
 
 void ViewProviderSectionAnalysis::unsetEdit(int ModNum)
 {
-    if (ModNum == ViewProvider::Default) {
-        // Hide the cutting plane visual when leaving edit mode
-        if (pcPlaneSwitch) {
-            pcPlaneSwitch->whichChild = SO_SWITCH_NONE;
-        }
-        transformDragger.reset();
-        Gui::Control().closeDialog(nullptr);
+    if (ModNum != ViewProvider::Default) {
+        return ViewProviderPart::unsetEdit(ModNum);
     }
-    else {
-        ViewProviderPart::unsetEdit(ModNum);
+
+    // Hide the cutting plane visual when leaving edit mode
+    if (pcPlaneSwitch) {
+        pcPlaneSwitch->whichChild = SO_SWITCH_NONE;
     }
+    Gui::Control().closeDialog(nullptr);
 }
