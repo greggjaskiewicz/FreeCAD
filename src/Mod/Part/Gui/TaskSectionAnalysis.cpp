@@ -430,22 +430,19 @@ void SectionAnalysisWidget::setGizmoPositions()
     Bnd_Box bbox;
     Base::Vector3d hint(0, 0, 0);
     if (feature->sourceBoundingBox(bbox) && !bbox.IsVoid()) {
-        double xmin = 0;
-        double ymin = 0;
-        double zmin = 0;
-        double xmax = 0;
-        double ymax = 0;
-        double zmax = 0;
-        bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
-        hint = Base::Vector3d((xmin + xmax) * 0.5, (ymin + ymax) * 0.5, (zmin + zmax) * 0.5);
-    }
+
+        const gp_Pnt lo = bbox.CornerMin();
+        const gp_Pnt hi = bbox.CornerMax();
+        hint = Base::Vector3d((lo.X() + hi.X()) * 0.5,
+                            (lo.Y() + hi.Y()) * 0.5,
+                            (lo.Z() + hi.Z()) * 0.5);
+    } 
     const Base::Vector3d anchor = Part::SectionAnalysis::draggerAnchor(normal, offset, hint);
 
     offsetGizmo->Gizmo::setDraggerPlacement(anchor, normal);
 
-    // Both arcs on the arrow, never below it: "below" means the far side of the
-    // plane along its own normal, which buries a handle in the material being
-    // cut away. They are told apart within the plane instead, by putting their
+    // Both arcs on the arrow, never below it.
+    // They are told apart within the plane, by putting their
     // pivots on the two in-plane axes a quarter turn from each other.
     tiltGizmo1->placeOverLinearGizmo(offsetGizmo);
     tiltGizmo2->placeOverLinearGizmo(offsetGizmo);
@@ -458,23 +455,40 @@ void SectionAnalysisWidget::setGizmoPositions()
     Base::Vector3d tangent1;
     Base::Vector3d tangent2;
     presetFrame(baseNormal, tangent1, tangent2);
-    // Pivot first, axis second: setPointerDirection overwrites the container
-    // rotation while setArcNormalDirection composes onto it. Both pivots lie in
-    // the cutting plane, so neither handle ends up behind it.
-    tiltGizmo1->getDraggerContainer()->setPointerDirection(Base::convertTo<SbVec3f>(tangent2));
-    // applyAngles() turns by -angle1 about tangent1, so the arc has to face the
-    // other way for a drag to move the plane the way it is pushed.
-    tiltGizmo1->getDraggerContainer()->setArcNormalDirection(
-        Base::convertTo<SbVec3f>(-tangent1)
-    );
-    tiltGizmo2->getDraggerContainer()->setPointerDirection(Base::convertTo<SbVec3f>(tangent1));
-    tiltGizmo2->getDraggerContainer()->setArcNormalDirection(
-        Base::convertTo<SbVec3f>(tangent2)
-    );
+
+    // Pivot first: setPointerDirection overwrites the container rotation,
+    // setArcNormalDirection composes onto it.
+    auto placeArc = [](Gui::RotationGizmo* arc,
+                    const Base::Vector3d& pivot,
+                    const Base::Vector3d& axis) {
+        auto* container = arc->getDraggerContainer();
+        container->setPointerDirection(Base::convertTo<SbVec3f>(pivot));
+        container->setArcNormalDirection(Base::convertTo<SbVec3f>(axis));
+    };
+
+    // Negated: applyAngles() turns by -angle1, so the arc must face the other way.
+    placeArc(tiltGizmo1, tangent2, -tangent1);
+    placeArc(tiltGizmo2, tangent1, tangent2);
+
+    // // Pivot first, axis second: setPointerDirection overwrites the container
+    // // rotation while setArcNormalDirection composes onto it. Both pivots lie in
+    // // the cutting plane, so neither handle ends up behind it.
+    // tiltGizmo1->getDraggerContainer()->setPointerDirection(Base::convertTo<SbVec3f>(tangent2));
+    // // applyAngles() turns by -angle1 about tangent1, so the arc has to face the
+    // // other way for a drag to move the plane the way it is pushed.
+    // tiltGizmo1->getDraggerContainer()->setArcNormalDirection(
+    //     Base::convertTo<SbVec3f>(-tangent1)
+    // );
+    // tiltGizmo2->getDraggerContainer()->setPointerDirection(Base::convertTo<SbVec3f>(tangent1));
+    // tiltGizmo2->getDraggerContainer()->setArcNormalDirection(
+    //     Base::convertTo<SbVec3f>(tangent2)
+    // );
 
     const bool tiltable = angle1Spin->isEnabled();
     tiltGizmo1->setVisibility(tiltable);
     tiltGizmo2->setVisibility(tiltable);
+
+    gizmoContainer->calculateScaleAndOrientation();
 }
 
 
