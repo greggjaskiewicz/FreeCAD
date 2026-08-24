@@ -250,11 +250,11 @@ SectionCap::TriangleSoup SectionCap::fillLoops(
     const std::vector<std::vector<Base::Vector3d>>& loops,
     const Base::Vector3d& u,
     const Base::Vector3d& v,
-    int steps
+    double stripHeight
 )
 {
     TriangleSoup soup;
-    if (loops.empty() || steps < 1) {
+    if (loops.empty() || !std::isfinite(stripHeight) || stripHeight <= 0.0) {
         return soup;
     }
 
@@ -297,9 +297,19 @@ SectionCap::TriangleSoup SectionCap::fillLoops(
         return soup;
     }
 
+    // As many strips as this region spans, 
+    // The cap is bounded so a stray tiny height cannot ask for millions.
+    const int steps = std::clamp(
+        static_cast<int>(std::ceil((bMax - bMin) / stripHeight)),
+        1,
+        maxFillStrips
+    );
+
     const double height = (bMax - bMin) / static_cast<double>(steps);
     std::vector<double> crossings;
 
+    // Fill the cut region with a series of horizontal strips 
+    // Each strip is filled with a series of quads, which are then triangulated.    
     for (int k = 0; k < steps; ++k) {
         const double lower = bMin + height * k;
         const double upper = lower + height;

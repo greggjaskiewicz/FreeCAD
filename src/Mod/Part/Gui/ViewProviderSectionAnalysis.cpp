@@ -215,6 +215,7 @@ bool ViewProviderSectionAnalysis::isDefaultShapeColor(const Base::Color& colour)
 constexpr float hatchFadeSteps[] = {0.0f, 0.45f, 0.75f};
 constexpr double hatchFadePixelsPerLine[] = {3.0, 1.5, 0.75};
 
+
 SO_NODE_SOURCE(SoHatchLevelOfDetail)
 
 void SoHatchLevelOfDetail::initClass()
@@ -730,6 +731,31 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
     // chaining at OCCT's 1e-7 would leave every tessellation seam unjoined.
     constexpr double chainTolerance = 1e-3;
 
+    // How tall the cap's fill strips are, in model units, shared by every body
+    // so the fill is the same visual density throughout the section.
+    //
+    // Derived from the whole section rather than from each body: a strip count
+    // per body spends as much on a washer as on a machine frame, and on an
+    // assembly most of the work then lands on parts whose strips are far finer
+    // than a pixel. Sized so the section as a whole gets stripsAcrossSection of
+    // them, which is what the old fixed count was reaching for.
+    constexpr int stripsAcrossSection = 400;
+    double fillStripHeight = 0.0;
+    {
+        if (!sourceBBoxValid) {
+            refreshSourceBBoxCache();
+        }
+        // The cap lies in the plane, so the diagonal is a fair stand-in for how
+        // far the section reaches whichever way the plane is turned.
+        const double dx = sourceBBox[3] - sourceBBox[0];
+        const double dy = sourceBBox[4] - sourceBBox[1];
+        const double dz = sourceBBox[5] - sourceBBox[2];
+        const double diagonal = std::sqrt(dx * dx + dy * dy + dz * dz);
+        fillStripHeight = (sourceBBoxValid && diagonal > 0.0)
+            ? diagonal / stripsAcrossSection
+            : chainTolerance;
+    }
+
     // Walking the scene graph is most of the cost and does not depend on the
     // plane, so it is done once and kept.
     //
@@ -756,6 +782,7 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
             ++index;
             continue;
         }
+
         const auto loops = Part::SectionCap::chainLoops(segments, chainTolerance);
         if (loops.empty()) {
             ++index;
@@ -776,8 +803,7 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
             ? partColor(body.source, index)
             : appearance.front();
 
-        constexpr int fillSteps = 400;
-        const auto fill = Part::SectionCap::fillLoops(loops, u, v, fillSteps);
+        const auto fill = Part::SectionCap::fillLoops(loops, u, v, fillStripHeight);
         if (!fill.indices.empty()) {
             std::vector<SbVec3f> fillPoints;
             fillPoints.reserve(fill.points.size());

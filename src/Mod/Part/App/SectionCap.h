@@ -98,10 +98,16 @@ chainLoops(const std::vector<Segment>& segments, double tolerance);
 ///
 /// Uses the same scanline parity as `hatchLoops`, so holes are excluded without
 /// ever being identified as holes - which is what makes this possible without a
-/// polygon triangulator. The region is tiled by `steps` strips across, each
+/// polygon triangulator. The region is tiled by strips `stripHeight` tall, each
 /// strip emitting one quad per span, so adjacent strips meet exactly and leave
-/// no gaps. The boundary is therefore a staircase of that step size; the cap is
+/// no gaps. The boundary is therefore a staircase of that size; the cap is
 /// drawn with its outline on top, which covers it.
+///
+/// Takes a strip height rather than a strip count because the cost is
+/// strips x edges, and a count spends the same effort on a washer as on a
+/// machine frame - which on an assembly means most of the work lands on parts
+/// whose strips are far finer than a pixel. A height is the same visual density
+/// everywhere, and each region takes only as many strips as it spans.
 ///
 /// Without this the section is see-through and you look into the inside of the
 /// body you just cut.
@@ -109,8 +115,14 @@ PartExport TriangleSoup fillLoops(
     const std::vector<std::vector<Base::Vector3d>>& loops,
     const Base::Vector3d& u,
     const Base::Vector3d& v,
-    int steps
+    double stripHeight
 );
+
+/// Most strips `fillLoops` will use for one region however fine the height.
+///
+/// A backstop, not a tuning knob: a stray tiny height would otherwise ask for
+/// millions of strips and hang the view.
+inline constexpr int maxFillStrips = 2000;
 
 /// The box's extent projected onto `normal`, so a plane that misses a body can
 /// be rejected without visiting a triangle. False when the box is void.

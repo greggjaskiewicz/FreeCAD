@@ -696,12 +696,10 @@ void SectionAnalysisWidget::angleReferenceFrame(
             break;
         }
     }
-
-    Base::Console().message("angleReferenceFrame: currentIndex:%d curN=(%g,%g,%g) base=(%g,%g,%g)\n",
-                presetCombo->currentIndex(),
-                curN.x, curN.y, curN.z,
-                baseNormal.x, baseNormal.y, baseNormal.z);
-
+    // Base::Console().message("angleReferenceFrame: currentIndex:%d curN=(%g,%g,%g) base=(%g,%g,%g)\n",
+    //             presetCombo->currentIndex(),
+    //             curN.x, curN.y, curN.z,
+    //             baseNormal.x, baseNormal.y, baseNormal.z);
 
     // Rotate about world axes lying in the plane, not about an arbitrary frame:
     // the angles are meant to read as "tilt about X", and the boxes are labelled
@@ -746,7 +744,7 @@ void SectionAnalysisWidget::applyAngles()
     double a1 = -angle1Spin->value().getValue() * std::numbers::pi / 180.0;
     double a2 = angle2Spin->value().getValue() * std::numbers::pi / 180.0;
 
-    Base::Console().message("applyAngles: a1=%g a2=%g\n", a1, a2);
+    // Base::Console().message("applyAngles: a1=%g a2=%g\n", a1, a2);
 
     // Base normal and tilt axes both come from presetFrame, which is the same
     // frame the tilt handles are placed in. A second copy of the preset switch
