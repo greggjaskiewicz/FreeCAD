@@ -440,6 +440,7 @@ void SectionAnalysisWidget::setGizmoPositions()
     const Base::Vector3d anchor = Part::SectionAnalysis::draggerAnchor(normal, offset, hint);
 
     offsetGizmo->Gizmo::setDraggerPlacement(anchor, normal);
+    offsetGizmo->setMultFactor(feature->FlipCut.getValue() ? -1.0 : 1.0);
 
     // Both arcs on the arrow, never below it.
     // They are told apart within the plane, by putting their

@@ -188,7 +188,7 @@ SectionCap::chainLoops(const std::vector<Segment>& segments, double tolerance)
     std::vector<bool> used(segments.size(), false);
     const double tolSq = tolerance * tolerance;
 
-    auto findNext = [&](const Base::Vector3d& from, std::size_t skip) -> std::size_t {
+    auto findNext = [&](const Base::Vector3d& from) -> std::size_t {
         std::size_t found = segments.size();
         forEachNeighbourKey(keyOf(from, tolerance), [&](const GridKey& k) {
             if (found != segments.size()) {
@@ -199,7 +199,7 @@ SectionCap::chainLoops(const std::vector<Segment>& segments, double tolerance)
                 return;
             }
             for (std::size_t idx : it->second) {
-                if (idx == skip || used[idx]) {
+                if (used[idx]) {
                     continue;
                 }
                 if (Base::DistanceP2(segments[idx].start, from) <= tolSq
@@ -222,7 +222,7 @@ SectionCap::chainLoops(const std::vector<Segment>& segments, double tolerance)
         Base::Vector3d tail = segments[seed].end;
 
         while (true) {
-            const std::size_t next = findNext(tail, segments.size());
+            const std::size_t next = findNext(tail);
             if (next >= segments.size()) {
                 break;
             }
