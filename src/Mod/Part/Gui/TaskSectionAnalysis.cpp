@@ -415,6 +415,7 @@ bool SectionAnalysisWidget::anyGizmoDragging() const
 
 void SectionAnalysisWidget::setGizmoPositions()
 {
+    // guard against the case when gizmos arent there yet or already mid-dragging
     if (!gizmoContainer || !offsetGizmo || anyGizmoDragging()) {
         return;
     }
@@ -488,20 +489,6 @@ void SectionAnalysisWidget::setGizmoPositions()
     placeArc(tiltGizmo1, inPlane(tangent2), -tangent1);
     placeArc(tiltGizmo2, inPlane(tangent1), tangent2);
 
-    // // Pivot first, axis second: setPointerDirection overwrites the container
-    // // rotation while setArcNormalDirection composes onto it. Both pivots lie in
-    // // the cutting plane, so neither handle ends up behind it.
-    // tiltGizmo1->getDraggerContainer()->setPointerDirection(Base::convertTo<SbVec3f>(tangent2));
-    // // applyAngles() turns by -angle1 about tangent1, so the arc has to face the
-    // // other way for a drag to move the plane the way it is pushed.
-    // tiltGizmo1->getDraggerContainer()->setArcNormalDirection(
-    //     Base::convertTo<SbVec3f>(-tangent1)
-    // );
-    // tiltGizmo2->getDraggerContainer()->setPointerDirection(Base::convertTo<SbVec3f>(tangent1));
-    // tiltGizmo2->getDraggerContainer()->setArcNormalDirection(
-    //     Base::convertTo<SbVec3f>(tangent2)
-    // );
-
     const bool tiltable = angle1Spin->isEnabled();
     tiltGizmo1->setVisibility(tiltable);
     tiltGizmo2->setVisibility(tiltable);
@@ -534,6 +521,7 @@ void SectionAnalysisWidget::setupConnections()
         offsetSpin,
         qOverload<double>(&Gui::QuantitySpinBox::valueChanged),
         this,
+        // arrow gizmo moves the plane 
         [this](double value) {
             feature->PlaneOffset.setValue(value);
             setGizmoPositions();

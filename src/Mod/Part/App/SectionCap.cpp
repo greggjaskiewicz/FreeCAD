@@ -386,7 +386,7 @@ bool SectionCap::isClosed(const std::vector<Base::Vector3d>& loop, double tolera
     return Base::DistanceP2(loop.front(), loop.back()) <= tolerance * tolerance;
 }
 
-
+// Fill the loops with a series of horizontal strips, each strip is filled with a series of quads, which are then triangulated.
 std::vector<SectionCap::Segment> SectionCap::hatchLoops(
     const std::vector<std::vector<Base::Vector3d>>& loops,
     const Base::Vector3d& u,
