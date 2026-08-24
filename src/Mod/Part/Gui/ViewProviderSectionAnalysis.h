@@ -100,9 +100,9 @@ public:
     /// floating in space with nothing to place them against - worse still with
     /// two sections crossing. Drawing the removed half as a ghost puts them back
     /// in context. Off by default: it is an aid, not the point of the tool.
-    App::PropertyBool ShowGhost;
-    App::PropertyPercent GhostTransparency;
-    App::PropertyColor GhostColor;
+    App::PropertyBool ShowRemovedMaterial;
+    App::PropertyPercent RemovedMaterialTransparency;
+    App::PropertyColor RemovedMaterialColor;
 
     ViewProviderSectionAnalysis();
     ~ViewProviderSectionAnalysis() override;
@@ -178,15 +178,15 @@ private:
     /// Draw the cut-away half faintly, so the section has something to sit in.
     ///
     /// Rebuilds the geometry, so it is for when the triangles or the appearance
-    /// change - not for when the plane moves. See updateGhostClipPlane().
-    void updateGhost();
+    /// change - not for when the plane moves. See updateRemovedMaterialPlane().
+    void updateRemovedMaterial();
 
     /// Point the ghost's clip plane at the current cutting plane.
     ///
     /// All a plane move actually changes. The triangles are the same ones, and
     /// re-copying an assembly's worth of them per drag step is what made the
     /// ghost expensive enough to look like the section itself was slow.
-    void updateGhostClipPlane();
+    void updateRemovedMaterialPlane();
 
     /// Re-orient the dragger after the plane was changed from outside it
     void syncDraggerPlacement();
@@ -204,35 +204,34 @@ private:
     /// Recompute the section when visibility of an object under Source changes
     void slotChangedObject(const App::DocumentObject& obj, const App::Property& prop);
 
-
-
-    SoSwitch* pcPlaneSwitch = nullptr;
-    SoSeparator* pcPlaneRoot = nullptr;
-    SoShapeHints* pcPlaneHints = nullptr;
-    SoMaterial* pcPlaneMaterial = nullptr;
-    SoCoordinate3* pcPlaneCoords = nullptr;
-    SoFaceSet* pcPlaneFaceSet = nullptr;
-    SoMaterial* pcPlaneBorderMaterial = nullptr;
-    SoIndexedLineSet* pcPlaneBorderLines = nullptr;
+    SoSwitch* planeSwitch = nullptr;
+    SoSeparator* cuttingPlane = nullptr;
+    SoShapeHints* planeHints = nullptr;
+    SoMaterial* planeMaterial = nullptr;
+    SoCoordinate3* planeCoords = nullptr;
+    SoFaceSet* planeFaceSet = nullptr;
+    SoMaterial* planeBorderMaterial = nullptr;
+    SoIndexedLineSet* planeBorderLines = nullptr;
 
     // Hatching drawn as real line geometry (crisp at any zoom, arbitrary width)
-    SoSwitch* pcHatchSwitch = nullptr;
-    SoHatchLevelOfDetail* pcHatchLod = nullptr;
-    SoSeparator* pcHatchRoot = nullptr;
-    SoDrawStyle* pcHatchStyle = nullptr;
-    SoCoordinate3* pcHatchCoords = nullptr;
-    SoIndexedLineSet* pcHatchLines = nullptr;
+    SoSwitch* hatchSwitch = nullptr;
+    SoHatchLevelOfDetail* hatchLod = nullptr;
+    SoSeparator* hatchRoot = nullptr;
+    SoDrawStyle* hatchStyle = nullptr;
+    SoCoordinate3* hatchCoords = nullptr;
+    SoIndexedLineSet* hatchLines = nullptr;
 
     // Cap drawn from the scene graph. One child per source object, so each can
     // carry its own colour and hatch angle.
-    SoSwitch* pcCapSwitch = nullptr;
-    SoSeparator* pcCapRoot = nullptr;
+    SoSwitch* capSwitch = nullptr;
+    SoSeparator* capRoot = nullptr;
 
-    SoSwitch* pcGhostSwitch = nullptr;
-    SoSeparator* pcGhostRoot = nullptr;
+    SoSeparator* removedMaterialRoot = nullptr;
+    SoSwitch* removedMaterialSwitch = nullptr;
+
     /// Shared by every ghosted body, so moving the plane writes one field.
     /// Owned by pcGhostRoot; cleared whenever its children are.
-    SoClipPlane* pcGhostClip = nullptr;
+    SoClipPlane* removedMaterialClip = nullptr;
 
     /// Triangles harvested from the 3D view, one entry per source object.
     ///

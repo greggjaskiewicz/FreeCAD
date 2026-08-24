@@ -89,23 +89,24 @@ void forEachNeighbourKey(const GridKey& k, const std::function<void(const GridKe
 }  // namespace
 
 
-bool SectionCap::sliceTriangle(
+std::optional<Part::SectionCap::Segment> SectionCap::planeTriangleIntersection(
     const Base::Vector3d& a,
     const Base::Vector3d& b,
     const Base::Vector3d& c,
     const Base::Vector3d& normal,
-    double offset,
-    Segment& out
+    double offset
 )
 {
     const Base::Vector3d* p[3] = {&a, &b, &c};
+
+    // signed distance from the plane
     const double s[3] = {a * normal - offset, b * normal - offset, c * normal - offset};
 
     // Half open test: exactly zero or two edges cross, so a vertex sitting
     // on the plane cannot yield a duplicate or a dangling segment.
     const bool above[3] = {s[0] > 0.0, s[1] > 0.0, s[2] > 0.0};
     if (above[0] == above[1] && above[1] == above[2]) {
-        return false;
+        return std::nullopt;  // all on one side, or all on the plane
     }
 
     Base::Vector3d hit[2];
@@ -123,11 +124,10 @@ bool SectionCap::sliceTriangle(
     // collapse onto that vertex. It does not cross the plane, and the zero
     // length segment would only confuse the chaining below.
     if (hits != 2 || Base::DistanceP2(hit[0], hit[1]) <= 0.0) {
-        return false;
+        return std::nullopt;
     }
 
-    out = Segment {hit[0], hit[1]};
-    return true;
+    return SectionCap::Segment {hit[0], hit[1]};
 }
 
 
@@ -155,14 +155,13 @@ std::vector<SectionCap::Segment> SectionCap::sliceTriangles(
             continue;
         }
 
-        Segment segment;
-        if (sliceTriangle(soup.points[ia],
-                          soup.points[ib],
-                          soup.points[ic],
-                          normal,
-                          offset,
-                          segment)) {
-            segments.push_back(segment);
+        auto segment = planeTriangleIntersection(soup.points[ia],
+                                                 soup.points[ib],
+                                                 soup.points[ic],
+                                                 normal,
+                                                 offset);
+        if (segment.has_value()) {
+            segments.push_back(segment.value());
         }
     }
 

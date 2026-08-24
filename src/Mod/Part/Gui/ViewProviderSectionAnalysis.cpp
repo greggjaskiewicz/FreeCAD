@@ -299,14 +299,14 @@ ViewProviderSectionAnalysis::ViewProviderSectionAnalysis()
     );
 
     ADD_PROPERTY_TYPE(
-        ShowGhost,
+        ShowRemovedMaterial,
         (false),
         "Section Analysis",
         App::Prop_None,
         "Show the cut-away material faintly, so the section has context"
     );
     ADD_PROPERTY_TYPE(
-        GhostTransparency,
+        RemovedMaterialTransparency,
         (97),
         "Section Analysis",
         App::Prop_None,
@@ -314,7 +314,7 @@ ViewProviderSectionAnalysis::ViewProviderSectionAnalysis()
         "same scale as any other object's Transparency"
     );
     ADD_PROPERTY_TYPE(
-        GhostColor,
+        RemovedMaterialColor,
         (Base::Color(0.5843F, 0.98823F, 0.8823F)), /// x-ray vision sci-fi colour
         "Section Analysis",
         App::Prop_None,
@@ -329,6 +329,9 @@ ViewProviderSectionAnalysis::~ViewProviderSectionAnalysis()
     removeClipPlane();
 }
 
+// Attach and create the visual representation of the cutting plane and hatching. 
+// The plane is a translucent rectangle with a solid border.
+// The hatching is a set of diagonal lines (per settings in the view provider).
 void ViewProviderSectionAnalysis::attach(App::DocumentObject* pcFeat)
 {
     ViewProviderPart::attach(pcFeat);
@@ -343,78 +346,78 @@ void ViewProviderSectionAnalysis::attach(App::DocumentObject* pcFeat)
     );
 
     // Create the translucent cutting plane visual
-    pcPlaneRoot = new SoSeparator();
-    pcPlaneRoot->setName("SectionPlaneVisual");
+    cuttingPlane = new SoSeparator();
+    cuttingPlane->setName("SectionPlaneVisual");
 
     auto* pickStyle = new SoPickStyle();
     pickStyle->style = SoPickStyle::UNPICKABLE;
-    pcPlaneRoot->addChild(pickStyle);
+    cuttingPlane->addChild(pickStyle);
 
-    pcPlaneHints = new SoShapeHints();
-    pcPlaneHints->vertexOrdering = SoShapeHints::COUNTERCLOCKWISE;
-    pcPlaneHints->shapeType = SoShapeHints::UNKNOWN_SHAPE_TYPE;
-    pcPlaneRoot->addChild(pcPlaneHints);
+    planeHints = new SoShapeHints();
+    planeHints->vertexOrdering = SoShapeHints::COUNTERCLOCKWISE;
+    planeHints->shapeType = SoShapeHints::UNKNOWN_SHAPE_TYPE;
+    cuttingPlane->addChild(planeHints);
 
-    pcPlaneMaterial = new SoMaterial();
-    pcPlaneMaterial->diffuseColor.setValue(0.3f, 0.6f, 0.9f);
-    pcPlaneMaterial->transparency.setValue(0.7f);
-    pcPlaneRoot->addChild(pcPlaneMaterial);
+    planeMaterial = new SoMaterial();
+    planeMaterial->diffuseColor.setValue(0.3f, 0.6f, 0.9f);
+    planeMaterial->transparency.setValue(0.7f);
+    cuttingPlane->addChild(planeMaterial);
 
-    pcPlaneCoords = new SoCoordinate3();
-    pcPlaneRoot->addChild(pcPlaneCoords);
+    planeCoords = new SoCoordinate3();
+    cuttingPlane->addChild(planeCoords);
 
-    pcPlaneFaceSet = new SoFaceSet();
-    pcPlaneFaceSet->numVertices.set1Value(0, 4);
-    pcPlaneRoot->addChild(pcPlaneFaceSet);
+    planeFaceSet = new SoFaceSet();
+    planeFaceSet->numVertices.set1Value(0, 4);
+    cuttingPlane->addChild(planeFaceSet);
 
-    pcPlaneBorderMaterial = new SoMaterial();
-    pcPlaneBorderMaterial->diffuseColor.setValue(0.2f, 0.4f, 0.8f);
-    pcPlaneBorderMaterial->transparency.setValue(0.0f);
-    pcPlaneRoot->addChild(pcPlaneBorderMaterial);
+    planeBorderMaterial = new SoMaterial();
+    planeBorderMaterial->diffuseColor.setValue(0.2f, 0.4f, 0.8f);
+    planeBorderMaterial->transparency.setValue(0.0f);
+    cuttingPlane->addChild(planeBorderMaterial);
 
     auto* borderStyle = new SoDrawStyle();
     borderStyle->lineWidth.setValue(2.0f);
-    pcPlaneRoot->addChild(borderStyle);
+    cuttingPlane->addChild(borderStyle);
 
-    pcPlaneBorderLines = new SoIndexedLineSet();
-    pcPlaneRoot->addChild(pcPlaneBorderLines);
+    planeBorderLines = new SoIndexedLineSet();
+    cuttingPlane->addChild(planeBorderLines);
 
     // Wrap plane in a switch so we can hide it
-    pcPlaneSwitch = new SoSwitch();
-    pcPlaneSwitch->addChild(pcPlaneRoot);
-    pcPlaneSwitch->whichChild = SO_SWITCH_ALL;
-    pcRoot->addChild(pcPlaneSwitch);
+    planeSwitch = new SoSwitch();
+    planeSwitch->addChild(cuttingPlane);
+    planeSwitch->whichChild = SO_SWITCH_ALL;
+    pcRoot->addChild(planeSwitch);
 
     // Hatching 45 deg diagonal lines per ISO 128-50, built as real line geometry
     // rather than a repeating texture: the lines stay one pixel-crisp at any
     // zoom level and their width is whatever HatchLineWidth says.
-    pcHatchRoot = new SoSeparator();
-    pcHatchRoot->setName("SectionHatching");
-    pcHatchRoot->renderCaching = SoSeparator::OFF;
+    hatchRoot = new SoSeparator();
+    hatchRoot->setName("SectionHatching");
+    hatchRoot->renderCaching = SoSeparator::OFF;
 
     auto* hatchPick = new SoPickStyle();
     hatchPick->style = SoPickStyle::UNPICKABLE;
-    pcHatchRoot->addChild(hatchPick);
+    hatchRoot->addChild(hatchPick);
 
     auto* hatchBind = new SoMaterialBinding();
     hatchBind->value = SoMaterialBinding::OVERALL;
-    pcHatchRoot->addChild(hatchBind);
+    hatchRoot->addChild(hatchBind);
 
-    pcHatchStyle = new SoDrawStyle();
-    pcHatchStyle->style = SoDrawStyle::LINES;
-    pcHatchStyle->lineWidth.setValue(static_cast<float>(HatchLineWidth.getValue()));
-    pcHatchRoot->addChild(pcHatchStyle);
+    hatchStyle = new SoDrawStyle();
+    hatchStyle->style = SoDrawStyle::LINES;
+    hatchStyle->lineWidth.setValue(static_cast<float>(HatchLineWidth.getValue()));
+    hatchRoot->addChild(hatchStyle);
 
-    pcHatchCoords = new SoCoordinate3();
-    pcHatchRoot->addChild(pcHatchCoords);
+    hatchCoords = new SoCoordinate3();
+    hatchRoot->addChild(hatchCoords);
 
-    pcHatchLines = new SoIndexedLineSet();
-    pcHatchRoot->addChild(pcHatchLines);
+    hatchLines = new SoIndexedLineSet();
+    hatchRoot->addChild(hatchLines);
 
     // Increasingly transparent copies of the same geometry, then nothing. The
     // levels differ only by material, so they share one set of coordinates and
     // one line set below pcHatchRoot.
-    pcHatchLod = new SoHatchLevelOfDetail();
+    hatchLod = new SoHatchLevelOfDetail();
     for (float alpha : hatchFadeSteps) {
         auto* level = new SoSeparator();
         level->renderCaching = SoSeparator::OFF;
@@ -422,34 +425,34 @@ void ViewProviderSectionAnalysis::attach(App::DocumentObject* pcFeat)
         levelMat->diffuseColor.setValue(0.1f, 0.1f, 0.1f);
         levelMat->transparency.setValue(alpha);
         level->addChild(levelMat);
-        level->addChild(pcHatchRoot);
-        pcHatchLod->addChild(level);
+        level->addChild(hatchRoot);
+        hatchLod->addChild(level);
     }
-    pcHatchLod->addChild(new SoGroup());
+    hatchLod->addChild(new SoGroup());
 
-    pcHatchSwitch = new SoSwitch();
-    pcHatchSwitch->addChild(pcHatchLod);
-    pcHatchSwitch->whichChild = (hatchEnabled && Visibility.getValue()) ? SO_SWITCH_ALL
+    hatchSwitch = new SoSwitch();
+    hatchSwitch->addChild(hatchLod);
+    hatchSwitch->whichChild = (hatchEnabled && Visibility.getValue()) ? SO_SWITCH_ALL
                                                                         : SO_SWITCH_NONE;
-    pcRoot->addChild(pcHatchSwitch);
+    pcRoot->addChild(hatchSwitch);
 
-    pcCapRoot = new SoSeparator();
-    pcCapRoot->renderCaching = SoSeparator::OFF;
-    pcGhostRoot = new SoSeparator();
-    pcGhostRoot->renderCaching = SoSeparator::OFF;
-    pcGhostSwitch = new SoSwitch();
-    pcGhostSwitch->addChild(pcGhostRoot);
-    pcGhostSwitch->whichChild = SO_SWITCH_NONE;
-    pcRoot->addChild(pcGhostSwitch);
+    capRoot = new SoSeparator();
+    capRoot->renderCaching = SoSeparator::OFF;
+    removedMaterialRoot = new SoSeparator();
+    removedMaterialRoot->renderCaching = SoSeparator::OFF;
+    removedMaterialSwitch = new SoSwitch();
+    removedMaterialSwitch->addChild(removedMaterialRoot);
+    removedMaterialSwitch->whichChild = SO_SWITCH_NONE;
+    pcRoot->addChild(removedMaterialSwitch);
 
-    pcCapSwitch = new SoSwitch();
-    pcCapSwitch->addChild(pcCapRoot);
-    pcCapSwitch->whichChild = Visibility.getValue() ? SO_SWITCH_ALL : SO_SWITCH_NONE;
-    pcRoot->addChild(pcCapSwitch);
+    capSwitch = new SoSwitch();
+    capSwitch->addChild(capRoot);
+    capSwitch->whichChild = Visibility.getValue() ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+    pcRoot->addChild(capSwitch);
 
     updateHatchGeometry();
     updateCapFromScene();
-    updateGhost();
+    updateRemovedMaterial();
     updatePlaneVisual();
 }
 
@@ -519,9 +522,9 @@ void ViewProviderSectionAnalysis::refreshHarvestCache()
 
 
 
-void ViewProviderSectionAnalysis::updateGhostClipPlane()
+void ViewProviderSectionAnalysis::updateRemovedMaterialPlane()
 {
-    if (!pcGhostClip) {
+    if (!removedMaterialClip) {
         return;
     }
 
@@ -534,7 +537,7 @@ void ViewProviderSectionAnalysis::updateGhostClipPlane()
 
     // World coordinates, so the plane needs no per object transform. Keeping
     // the half the section throws away means not negating the normal.
-    pcGhostClip->plane.setValue(SbPlane(
+    removedMaterialClip->plane.setValue(SbPlane(
         SbVec3f(static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z)),
         SbVec3f(static_cast<float>(n.x * d),
                 static_cast<float>(n.y * d),
@@ -543,17 +546,17 @@ void ViewProviderSectionAnalysis::updateGhostClipPlane()
 }
 
 
-void ViewProviderSectionAnalysis::updateGhost()
+void ViewProviderSectionAnalysis::updateRemovedMaterial()
 {
-    if (!pcGhostRoot || !pcGhostSwitch) {
+    if (!removedMaterialRoot || !removedMaterialSwitch) {
         return;
     }
-    pcGhostRoot->removeAllChildren();
-    pcGhostClip = nullptr;
-    pcGhostSwitch->whichChild = SO_SWITCH_NONE;
+    removedMaterialRoot->removeAllChildren();
+    removedMaterialClip = nullptr;
+    removedMaterialSwitch->whichChild = SO_SWITCH_NONE;
 
     auto* feat = getObject<Part::SectionAnalysis>();
-    if (!feat || !ShowGhost.getValue() || !Visibility.getValue()) {
+    if (!feat || !ShowRemovedMaterial.getValue() || !Visibility.getValue()) {
         return;
     }
 
@@ -578,15 +581,15 @@ void ViewProviderSectionAnalysis::updateGhost()
     refreshHarvestCache();
 
     // A second copy of an assembly's triangles is hundreds of megabytes, so
-    // there is a point past which the ghost is not worth its cost.
-    constexpr std::size_t maxGhostTriangles = 5000000;
+    // there is a point past which the removed material is not worth its cost.
+    constexpr std::size_t maxRemovedMaterialTriangles = 5000000;
     std::size_t totalTriangles = 0;
     for (const HarvestedBody& body : harvestCache) {
         totalTriangles += body.soup.indices.size() / 3;
     }
-    if (totalTriangles > maxGhostTriangles) {
+    if (totalTriangles > maxRemovedMaterialTriangles) {
         Base::Console().warning(
-            "SectionAnalysis: not drawing the cut-away ghost, %zu triangles is too "
+            "SectionAnalysis: not drawing the cut-away removed material, %zu triangles is too "
             "many to copy for a visual aid.\n",
             totalTriangles
         );
@@ -595,7 +598,7 @@ void ViewProviderSectionAnalysis::updateGhost()
 
     // Every body is drawn identically and against the same plane, so all of this
     // sits above them rather than being repeated per body. That is what leaves a
-    // plane move with exactly one field to write - see updateGhostClipPlane().
+    // plane move with exactly one field to write - see updateRemovedMaterialPlane().
     // Rebuilding these nodes on every drag step meant re-copying the whole
     // assembly to say nothing more than "the plane moved".
 
@@ -603,36 +606,36 @@ void ViewProviderSectionAnalysis::updateGhost()
     // able to select a hint.
     auto* pickStyle = new SoPickStyle();
     pickStyle->style = SoPickStyle::UNPICKABLE;
-    pcGhostRoot->addChild(pickStyle);
+    removedMaterialRoot->addChild(pickStyle);
 
-    pcGhostClip = new SoClipPlane();
-    pcGhostClip->on.setValue(TRUE);
-    pcGhostRoot->addChild(pcGhostClip);
-    updateGhostClipPlane();
+    removedMaterialClip = new SoClipPlane();
+    removedMaterialClip->on.setValue(TRUE);
+    removedMaterialRoot->addChild(removedMaterialClip);
+    updateRemovedMaterialPlane();
 
     // Drawn the way the rest of FreeCAD draws a preview: one flat colour,
     // unlit and translucent, so it reads as an overlay rather than as a
     // second, dimmer model competing with the real one.
     auto* lightModel = new SoLightModel();
     lightModel->model = SoLightModel::BASE_COLOR;
-    pcGhostRoot->addChild(lightModel);
+    removedMaterialRoot->addChild(lightModel);
 
     auto* polygonOffset = new SoPolygonOffset();
     polygonOffset->factor = 1.0F;
     polygonOffset->units = 1.0F;
     polygonOffset->on = TRUE;
     polygonOffset->styles = SoPolygonOffset::FILLED;
-    pcGhostRoot->addChild(polygonOffset);
+    removedMaterialRoot->addChild(polygonOffset);
 
     auto* material = new SoMaterial();
-    material->diffuseColor.setValue(Base::convertTo<SbColor>(GhostColor.getValue()));
-    material->transparency.setValue(static_cast<float>(GhostTransparency.getValue()) / 100.0F);
-    pcGhostRoot->addChild(material);
+    material->diffuseColor.setValue(Base::convertTo<SbColor>(RemovedMaterialColor.getValue()));
+    material->transparency.setValue(static_cast<float>(RemovedMaterialTransparency.getValue()) / 100.0F);
+    removedMaterialRoot->addChild(material);
 
     auto* hints = new SoShapeHints();
     hints->vertexOrdering = SoShapeHints::UNKNOWN_ORDERING;
     hints->shapeType = SoShapeHints::UNKNOWN_SHAPE_TYPE;
-    pcGhostRoot->addChild(hints);
+    removedMaterialRoot->addChild(hints);
 
     std::size_t bodiesDrawn = 0;
     for (const HarvestedBody& body : harvestCache) {
@@ -668,14 +671,14 @@ void ViewProviderSectionAnalysis::updateGhost()
         faces->coordIndex.setValues(0, static_cast<int>(faceIndex.size()), faceIndex.data());
         group->addChild(faces);
 
-        pcGhostRoot->addChild(group);
+        removedMaterialRoot->addChild(group);
         ++bodiesDrawn;
     }
 
     // Counted rather than read off the child count, which is never zero now that
     // the shared state nodes are added before the bodies are.
     if (bodiesDrawn > 0) {
-        pcGhostSwitch->whichChild = SO_SWITCH_ALL;
+        removedMaterialSwitch->whichChild = SO_SWITCH_ALL;
     }
 }
 
@@ -690,10 +693,10 @@ void ViewProviderSectionAnalysis::releaseHarvestCache()
 
 void ViewProviderSectionAnalysis::updateCapFromScene()
 {
-    if (!pcCapRoot) {
+    if (!capRoot) {
         return;
     }
-    pcCapRoot->removeAllChildren();
+    capRoot->removeAllChildren();
 
     auto* feat = getObject<Part::SectionAnalysis>();
     // In Geometry mode the cap is real B-rep faces drawn the usual way, and
@@ -705,8 +708,8 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
         return;
     }
 
-    if (pcCapSwitch) {
-        pcCapSwitch->whichChild = Visibility.getValue() ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+    if (capSwitch) {
+        capSwitch->whichChild = Visibility.getValue() ? SO_SWITCH_ALL : SO_SWITCH_NONE;
     }
 
     Base::Vector3d n;
@@ -730,7 +733,7 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
     // Walking the scene graph is most of the cost and does not depend on the
     // plane, so it is done once and kept.
     //
-    // The ghost is deliberately not rebuilt from here. It is built from the same
+    // The removedMaterial is deliberately not rebuilt from here. It is built from the same
     // harvest and the callers that invalidate one invalidate the other, so doing
     // it here only meant doing it twice per plane move - once here and once from
     // updateData(), which already asks for both.
@@ -908,7 +911,7 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
         lines->coordIndex.setValues(0, static_cast<int>(lineIndex.size()), lineIndex.data());
         node->addChild(lines);
 
-        pcCapRoot->addChild(node);
+        capRoot->addChild(node);
         ++index;
     }
 }
@@ -1103,11 +1106,11 @@ void ViewProviderSectionAnalysis::slotChangedObject(
 
     // Geometry edits do not move the plane, so there is nothing for the feature
     // to recompute - the cap just has to be rebuilt from the new triangles. The
-    // ghost is built from the same harvest that was just invalidated, so it goes
+    // removed material is built from the same harvest that was just invalidated, so it goes
     // stale on exactly the same edits.
     if (!visibilityChanged) {
         updateCapFromScene();
-        updateGhost();
+        updateRemovedMaterial();
         return;
     }
 
@@ -1143,13 +1146,13 @@ void ViewProviderSectionAnalysis::refreshSourceBBoxCache()
 
 void ViewProviderSectionAnalysis::updatePlaneVisual()
 {
-    if (!pcPlaneCoords || !pcPlaneFaceSet) {
+    if (!planeCoords || !planeFaceSet) {
         return;
     }
 
     // Default to hidden and will be enabled if we successfully compute coordinates
-    pcPlaneFaceSet->numVertices.set1Value(0, 0);
-    pcPlaneBorderLines->coordIndex.setNum(0);  // clear border indices too
+    planeFaceSet->numVertices.set1Value(0, 0);
+    planeBorderLines->coordIndex.setNum(0);  // clear border indices too
 
     auto* feat = getObject<Part::SectionAnalysis>();
     if (!feat) {
@@ -1231,25 +1234,25 @@ void ViewProviderSectionAnalysis::updatePlaneVisual()
     Base::Vector3d p3 = planeCenter + u * (umid - uHalf - (bboxCenter * u))
         + v * (vmid + vHalf - (bboxCenter * v));
 
-    pcPlaneCoords->point.set1Value(0, SbVec3f(p0.x, p0.y, p0.z));
-    pcPlaneCoords->point.set1Value(1, SbVec3f(p1.x, p1.y, p1.z));
-    pcPlaneCoords->point.set1Value(2, SbVec3f(p2.x, p2.y, p2.z));
-    pcPlaneCoords->point.set1Value(3, SbVec3f(p3.x, p3.y, p3.z));
+    planeCoords->point.set1Value(0, SbVec3f(p0.x, p0.y, p0.z));
+    planeCoords->point.set1Value(1, SbVec3f(p1.x, p1.y, p1.z));
+    planeCoords->point.set1Value(2, SbVec3f(p2.x, p2.y, p2.z));
+    planeCoords->point.set1Value(3, SbVec3f(p3.x, p3.y, p3.z));
 
     // Now safe to render the quad and border
-    pcPlaneFaceSet->numVertices.set1Value(0, 4);
+    planeFaceSet->numVertices.set1Value(0, 4);
     static const int32_t borderIndices[] = {0, 1, 2, 3, 0, -1};
-    pcPlaneBorderLines->coordIndex.setValues(0, 6, borderIndices);
+    planeBorderLines->coordIndex.setValues(0, 6, borderIndices);
 }
 
 void ViewProviderSectionAnalysis::updateHatchGeometry()
 {
-    if (!pcHatchCoords || !pcHatchLines) {
+    if (!hatchCoords || !hatchLines) {
         return;
     }
 
-    pcHatchLines->coordIndex.setNum(0);
-    pcHatchCoords->point.setNum(0);
+    hatchLines->coordIndex.setNum(0);
+    hatchCoords->point.setNum(0);
 
     auto* feat = getObject<Part::SectionAnalysis>();
     if (!hatchEnabled || !feat) {
@@ -1325,7 +1328,7 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
 
     // If there is an easier way to do this already existing in FreeCAD codebase,
     // I could not find it...
-    auto sliceTriangle = [&](int32_t ia, int32_t ib, int32_t ic) {
+    auto planeTriangleIntersection = [&](int32_t ia, int32_t ib, int32_t ic) {
         const Base::Vector3d p[3] = {
             Base::Vector3d(pts[ia][0], pts[ia][1], pts[ia][2]),
             Base::Vector3d(pts[ib][0], pts[ib][1], pts[ib][2]),
@@ -1401,7 +1404,7 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
             continue;
         }
         for (size_t j = 2; j < poly.size(); ++j) {
-            sliceTriangle(poly[0], poly[j - 1], poly[j]);
+            planeTriangleIntersection(poly[0], poly[j - 1], poly[j]);
         }
         poly.clear();
     }
@@ -1414,8 +1417,8 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
     // `span / spacing` lines and each needs a few pixels to read as a line, so
     // the thresholds grow with the line count rather than being a fixed size.
     // An empty screenArea makes the node always pick the first child.
-    if (pcHatchLod) {
-        pcHatchLod->screenArea.setNum(0);
+    if (hatchLod) {
+        hatchLod->screenArea.setNum(0);
         if (AutoHideHatching.getValue() && spanMax > spanMin) {
             const double lines = (spanMax - spanMin) / spacing;
             float thresholds[std::size(hatchFadePixelsPerLine)];
@@ -1423,12 +1426,12 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
                 const double px = hatchFadePixelsPerLine[i] * lines;
                 thresholds[i] = static_cast<float>(px * px);
             }
-            pcHatchLod->screenArea.setValues(0, static_cast<int>(std::size(thresholds)), thresholds);
+            hatchLod->screenArea.setValues(0, static_cast<int>(std::size(thresholds)), thresholds);
         }
     }
 
-    pcHatchCoords->point.setValues(0, static_cast<int>(segPts.size()), segPts.data());
-    pcHatchLines->coordIndex.setValues(0, static_cast<int>(segIdx.size()), segIdx.data());
+    hatchCoords->point.setValues(0, static_cast<int>(segPts.size()), segPts.data());
+    hatchLines->coordIndex.setValues(0, static_cast<int>(segIdx.size()), segIdx.data());
 }
 
 
@@ -1494,8 +1497,8 @@ void ViewProviderSectionAnalysis::setHatching(bool on)
 
     // The hatching hangs off pcRoot rather than the display-mode switch, so it
     // has to follow the object's visibility explicitly
-    if (pcHatchSwitch) {
-        pcHatchSwitch->whichChild = (on && Visibility.getValue()) ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+    if (hatchSwitch) {
+        hatchSwitch->whichChild = (on && Visibility.getValue()) ? SO_SWITCH_ALL : SO_SWITCH_NONE;
     }
     updateHatchGeometry();
 }
@@ -1503,8 +1506,8 @@ void ViewProviderSectionAnalysis::setHatching(bool on)
 void ViewProviderSectionAnalysis::onChanged(const App::Property* prop)
 {
     if (prop == &HatchLineWidth) {
-        if (pcHatchStyle) {
-            pcHatchStyle->lineWidth.setValue(static_cast<float>(HatchLineWidth.getValue()));
+        if (hatchStyle) {
+            hatchStyle->lineWidth.setValue(static_cast<float>(HatchLineWidth.getValue()));
         }
     }
     else if (prop == &HatchSpacing || prop == &AutoHideHatching) {
@@ -1534,9 +1537,9 @@ void ViewProviderSectionAnalysis::onChanged(const App::Property* prop)
             updateCapFromScene();
         }
     }
-    if (prop == &ShowGhost || prop == &GhostTransparency || prop == &GhostColor) {
+    if (prop == &ShowRemovedMaterial || prop == &RemovedMaterialTransparency || prop == &RemovedMaterialColor) {
         if (!isRestoring()) {
-            updateGhost();
+            updateRemovedMaterial();
         }
     }
 
@@ -1545,8 +1548,8 @@ void ViewProviderSectionAnalysis::onChanged(const App::Property* prop)
 
 void ViewProviderSectionAnalysis::setShowPlane(bool on)
 {
-    if (pcPlaneSwitch) {
-        pcPlaneSwitch->whichChild = on ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+    if (planeSwitch) {
+        planeSwitch->whichChild = on ? SO_SWITCH_ALL : SO_SWITCH_NONE;
     }
 }
 
@@ -1592,15 +1595,15 @@ void ViewProviderSectionAnalysis::show()
         applyPerSolidColors();
     }
     // Plane visual hidden by default - shown when editing via task panel
-    if (pcPlaneSwitch) {
-        pcPlaneSwitch->whichChild = SO_SWITCH_NONE;
+    if (planeSwitch) {
+        planeSwitch->whichChild = SO_SWITCH_NONE;
     }
-    if (pcCapSwitch) {
-        pcCapSwitch->whichChild = SO_SWITCH_ALL;
+    if (capSwitch) {
+        capSwitch->whichChild = SO_SWITCH_ALL;
     }
     updateCapFromScene();
-    // The ghost draws nothing while hidden, so coming back has to build it
-    updateGhost();
+    // The removed material draws nothing while hidden, so coming back has to build it
+    updateRemovedMaterial();
     ViewProviderPart::show();
 
     // After the base class, which rebuilds the tessellation the hatching is
@@ -1611,20 +1614,20 @@ void ViewProviderSectionAnalysis::show()
 void ViewProviderSectionAnalysis::hide()
 {
     removeClipPlane();
-    if (pcPlaneSwitch) {
-        pcPlaneSwitch->whichChild = SO_SWITCH_NONE;
+    if (planeSwitch) {
+        planeSwitch->whichChild = SO_SWITCH_NONE;
     }
-    if (pcHatchSwitch) {
-        pcHatchSwitch->whichChild = SO_SWITCH_NONE;
+    if (hatchSwitch) {
+        hatchSwitch->whichChild = SO_SWITCH_NONE;
     }
-    if (pcCapSwitch) {
-        pcCapSwitch->whichChild = SO_SWITCH_NONE;
+    if (capSwitch) {
+        capSwitch->whichChild = SO_SWITCH_NONE;
     }
-    // Hiding the section has to hide the hint that goes with it. updateGhost()
+    // Hiding the section has to hide the hint that goes with it. updateRemovedMaterial()
     // already refuses to draw while invisible, but nothing was calling it here,
     // so the cut-away material stayed on screen after the section went away.
-    if (pcGhostSwitch) {
-        pcGhostSwitch->whichChild = SO_SWITCH_NONE;
+    if (removedMaterialSwitch) {
+        removedMaterialSwitch->whichChild = SO_SWITCH_NONE;
     }
     ViewProviderPart::hide();
 }
@@ -1653,11 +1656,11 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
         // The scene graph cap is re-sliced for any plane change, offset
         // included: unlike the OCCT path there is no shape to wait for.
         updateCapFromScene();
-        // The ghost's triangles are the same ones whichever way the plane
+        // The removed material's triangles are the same ones whichever way the plane
         // points, so only the plane it is clipped against has moved. This runs
         // on every drag step; rebuilding the geometry here meant re-copying the
         // whole assembly to say nothing more than that.
-        updateGhostClipPlane();
+        updateRemovedMaterialPlane();
     }
 
     // The clipped set follows SourceParts, which execute() rebuilds
@@ -1678,7 +1681,7 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
         // it at all - and then nothing would rebuild what is drawn.
         if (harvestStale) {
             updateCapFromScene();
-            updateGhost();
+            updateRemovedMaterial();
         }
     }
 
@@ -1688,7 +1691,7 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
     // is null in both modes and never changes.
     if (prop == &feat->ResultMode) {
         updateCapFromScene();
-        updateGhost();
+        updateRemovedMaterial();
     }
 
     if (prop == &feat->Shape) {
@@ -1742,8 +1745,8 @@ bool ViewProviderSectionAnalysis::setEdit(int ModNum)
     Gui::Selection().clearSelection();
 
     // Show the cutting plane visual when entering edit mode
-    if (pcPlaneSwitch) {
-        pcPlaneSwitch->whichChild = SO_SWITCH_ALL;
+    if (planeSwitch) {
+        planeSwitch->whichChild = SO_SWITCH_ALL;
     }
 
     if (reusable) {
@@ -1766,8 +1769,8 @@ void ViewProviderSectionAnalysis::unsetEdit(int ModNum)
     }
 
     // Hide the cutting plane visual when leaving edit mode
-    if (pcPlaneSwitch) {
-        pcPlaneSwitch->whichChild = SO_SWITCH_NONE;
+    if (planeSwitch) {
+        planeSwitch->whichChild = SO_SWITCH_NONE;
     }
     Gui::Control().closeDialog(nullptr);
 }

@@ -102,18 +102,19 @@ private:
     /// Re-place the handles after the plane has moved.
     void setGizmoPositions();
 
-    /// The frame the angle boxes are expressed in: the preset's base normal and
-    /// the two in-plane axes the angles turn about.
+    /// Base orientation and the two axes the angle boxes turn about.
     ///
-    /// Derived from the preset rather than from the current normal, so it holds
-    /// still while the plane is tilted. Both the angle maths and the tilt handles
-    /// read it, because an arc that turns about a different axis than its spin
-    /// box is worse than no handle at all.
-    void presetFrame(
+    /// The single source for both what the angles mean (applyAngles rotates the
+    /// base normal about these) and where the tilt handles go (setGizmoPositions
+    /// uses them as the arcs' rotation axes). A handle turning about a different
+    /// axis than the box it drives is worse than no handle, so both must read the
+    /// same frame.
+    void angleReferenceFrame(
         Base::Vector3d& baseNormal,
-        Base::Vector3d& tangent1,
-        Base::Vector3d& tangent2
+        Base::Vector3d& angle1Axis,
+        Base::Vector3d& angle2Axis
     ) const;
+
     void onPresetChanged(int index);
     void onAngle1Changed(double val);
     void onAngle2Changed(double val);

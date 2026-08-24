@@ -133,20 +133,22 @@ TEST(SectionCapSlice, testASingleTriangleCrossingYieldsItsSegment)
 {
     // the per triangle entry point the Coin traversal uses directly
     using V = Base::Vector3d;
-    Segment s;
 
-    ASSERT_TRUE(sliceTriangle(V(0, 0, -5), V(10, 0, -5), V(5, 0, 5), Z, 0.0, s));
-    EXPECT_NEAR(s.start.z, 0.0, 1e-9);
-    EXPECT_NEAR(s.end.z, 0.0, 1e-9);
+    auto segment = planeTriangleIntersection(V(0, 0, -5), V(10, 0, -5), V(5, 0, 5), Z, 0.0);
+    ASSERT_TRUE(segment.has_value());
+    EXPECT_NEAR(segment.value().start.z, 0.0, 1e-9);
+    EXPECT_NEAR(segment.value().end.z, 0.0, 1e-9);
 }
 
 TEST(SectionCapSlice, testATriangleClearOfThePlaneYieldsNothing)
 {
     using V = Base::Vector3d;
-    Segment s;
 
-    EXPECT_FALSE(sliceTriangle(V(0, 0, 5), V(10, 0, 5), V(5, 0, 9), Z, 0.0, s));
-    EXPECT_FALSE(sliceTriangle(V(0, 0, -5), V(10, 0, -5), V(5, 0, -9), Z, 0.0, s));
+    auto segment = planeTriangleIntersection(V(0, 0, 5), V(10, 0, 5), V(5, 0, 9), Z, 0.0);
+    ASSERT_TRUE(segment.has_value());
+
+    auto segment2 = planeTriangleIntersection(V(0, 0, -5), V(10, 0, -5), V(5, 0, -9), Z, 0.0);
+    ASSERT_FALSE(segment2.has_value());
 }
 
 TEST(SectionCapSlice, testThePerTriangleAndSoupPathsAgree)
@@ -158,14 +160,13 @@ TEST(SectionCapSlice, testThePerTriangleAndSoupPathsAgree)
 
     std::vector<Segment> viaTriangle;
     for (std::size_t i = 0; i + 2 < soup.indices.size(); i += 3) {
-        Segment s;
-        if (sliceTriangle(soup.points[soup.indices[i]],
-                          soup.points[soup.indices[i + 1]],
-                          soup.points[soup.indices[i + 2]],
-                          Z,
-                          5.0,
-                          s)) {
-            viaTriangle.push_back(s);
+        auto segment = planeTriangleIntersection(soup.points[soup.indices[i]],
+                                                soup.points[soup.indices[i + 1]],
+                                                soup.points[soup.indices[i + 2]],
+                                                Z,
+                                                5.0);
+        if (segment.has_value()) {
+            viaTriangle.push_back(segment.value());
         }
     }
 

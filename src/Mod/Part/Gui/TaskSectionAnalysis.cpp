@@ -274,7 +274,7 @@ void SectionAnalysisWidget::setupUi()
         tr("Draw the material the section removes faintly, so the\n"
            "cross-sections have something to sit in")
     );
-    ghostCheck->setChecked(viewProvider->ShowGhost.getValue());
+    ghostCheck->setChecked(viewProvider->ShowRemovedMaterial.getValue());
     // Row and span given, like every other row here. The one argument overload
     // is QLayout's, and on a grid it drops the widget in a cell of its own
     // choosing spanning a single column - which is neither where this reads as
@@ -447,6 +447,12 @@ void SectionAnalysisWidget::setGizmoPositions()
     tiltGizmo1->placeOverLinearGizmo(offsetGizmo);
     tiltGizmo2->placeOverLinearGizmo(offsetGizmo);
 
+    // placeOverLinearGizmo turns automaticOrientation back on (Gizmo.cpp:439),
+    // which lets the camera overwrite the arc's rotation axis. Right for Pad,
+    // wrong here - our arcs must turn about the axis their spin box owns.
+    tiltGizmo1->automaticOrientation = false;
+    tiltGizmo2->automaticOrientation = false;
+
     // Each arc turns about the axis its own spin box turns about, in the frame
     // the angles are expressed in. Taking these from the current normal instead
     // would move the axes as the plane tilts, so the handles would drift and
@@ -454,7 +460,7 @@ void SectionAnalysisWidget::setGizmoPositions()
     Base::Vector3d baseNormal;
     Base::Vector3d tangent1;
     Base::Vector3d tangent2;
-    presetFrame(baseNormal, tangent1, tangent2);
+    angleReferenceFrame(baseNormal, tangent1, tangent2);
 
     // Pivot first: setPointerDirection overwrites the container rotation,
     // setArcNormalDirection composes onto it.
@@ -466,9 +472,20 @@ void SectionAnalysisWidget::setGizmoPositions()
         container->setArcNormalDirection(Base::convertTo<SbVec3f>(axis));
     };
 
+    // Only the pivot is projected into the current plane. The rotation axis
+    // stays the world axis its spin box is labelled with, so "X Angle" keeps
+    // meaning X; the pivot is only where the handle sits, and a world axis stops
+    // lying in the plane as soon as the plane is tilted - which left the handles
+    // poking through it at any non-zero angle. At zero tilt this is a no-op.
+    auto inPlane = [&normal](const Base::Vector3d& axis) {
+        const Base::Vector3d projected = axis - normal * (axis * normal);
+        const double len = projected.Length();
+        return (len > minUnitMagnitude) ? projected / len : axis;
+    };
+
     // Negated: applyAngles() turns by -angle1, so the arc must face the other way.
-    placeArc(tiltGizmo1, tangent2, -tangent1);
-    placeArc(tiltGizmo2, tangent1, tangent2);
+    placeArc(tiltGizmo1, inPlane(tangent2), -tangent1);
+    placeArc(tiltGizmo2, inPlane(tangent1), tangent2);
 
     // // Pivot first, axis second: setPointerDirection overwrites the container
     // // rotation while setArcNormalDirection composes onto it. Both pivots lie in
@@ -532,7 +549,7 @@ void SectionAnalysisWidget::setupConnections()
     });
     connect(perSolidColorCheck, &QCheckBox::toggled, this, &SectionAnalysisWidget::onPerSolidColorToggled);
     connect(ghostCheck, &QCheckBox::toggled, this, [this](bool on) {
-        viewProvider->ShowGhost.setValue(on);
+        viewProvider->ShowRemovedMaterial.setValue(on);
     });
     connect(showPlaneCheck, &QCheckBox::toggled, this, &SectionAnalysisWidget::onShowPlaneToggled);
     connect(updateViewCheck, &QCheckBox::toggled, this, &SectionAnalysisWidget::onUpdateViewToggled);
@@ -651,12 +668,14 @@ void SectionAnalysisWidget::onAngle2Changed(double /*val*/)
     applyAngles();
 }
 
-void SectionAnalysisWidget::presetFrame(
+void SectionAnalysisWidget::angleReferenceFrame(
     Base::Vector3d& baseNormal,
-    Base::Vector3d& tangent1,
-    Base::Vector3d& tangent2
+    Base::Vector3d& angle1Axis,
+    Base::Vector3d& angle2Axis
 ) const
 {
+
+
     // The preset gives the base orientation; the sign is taken from the current
     // normal so a section created facing -X keeps facing that way.
     const Base::Vector3d curN = feature->PlaneNormal.getValue();
@@ -677,20 +696,35 @@ void SectionAnalysisWidget::presetFrame(
         }
     }
 
+    Base::Console().message("angleReferenceFrame: currentIndex:%d curN=(%g,%g,%g) base=(%g,%g,%g)\n",
+                presetCombo->currentIndex(),
+                curN.x, curN.y, curN.z,
+                baseNormal.x, baseNormal.y, baseNormal.z);
+
+
     // Rotate about world axes lying in the plane, not about an arbitrary frame:
     // the angles are meant to read as "tilt about X", and the boxes are labelled
     // that way.
-    if (std::abs(baseNormal.z) > 0.9) {
-        tangent1 = Base::Vector3d::UnitX;
-        tangent2 = Base::Vector3d::UnitY;
+    // Whichever world axis the normal leans on most is the one there is no
+    // point turning about; the other two are the tilt axes. Picking the largest
+    // component rather than testing against a threshold keeps this right for the
+    // presets that are not axis aligned - View Direction and Custom - where a
+    // threshold could fall through and hand back an axis nearly parallel to the
+    // normal, which is a degenerate pivot.
+    const double alongX = std::abs(baseNormal.x);
+    const double alongY = std::abs(baseNormal.y);
+    const double alongZ = std::abs(baseNormal.z);
+    if (alongZ >= alongX && alongZ >= alongY) {
+        angle1Axis = Base::Vector3d::UnitX;
+        angle2Axis = Base::Vector3d::UnitY;
     }
-    else if (std::abs(baseNormal.y) > 0.9) {
-        tangent1 = Base::Vector3d::UnitX;
-        tangent2 = Base::Vector3d::UnitZ;
+    else if (alongY >= alongX) {
+        angle1Axis = Base::Vector3d::UnitX;
+        angle2Axis = Base::Vector3d::UnitZ;
     }
     else {
-        tangent1 = Base::Vector3d::UnitY;
-        tangent2 = Base::Vector3d::UnitZ;
+        angle1Axis = Base::Vector3d::UnitY;
+        angle2Axis = Base::Vector3d::UnitZ;
     }
 }
 
@@ -711,24 +745,26 @@ void SectionAnalysisWidget::applyAngles()
     double a1 = -angle1Spin->value().getValue() * std::numbers::pi / 180.0;
     double a2 = angle2Spin->value().getValue() * std::numbers::pi / 180.0;
 
+    Base::Console().message("applyAngles: a1=%g a2=%g\n", a1, a2);
+
     // Base normal and tilt axes both come from presetFrame, which is the same
     // frame the tilt handles are placed in. A second copy of the preset switch
     // lived here, and a handle turning about a different axis than the box it
     // drives is worse than no handle at all.
     Base::Vector3d baseNormal;
-    Base::Vector3d tangent1;
-    Base::Vector3d tangent2;
-    presetFrame(baseNormal, tangent1, tangent2);
+    Base::Vector3d angle1Axis;
+    Base::Vector3d angle2Axis;
+    angleReferenceFrame(baseNormal, angle1Axis, angle2Axis);
 
-    // Rodrigues' rotation: rotate baseNormal around tangent1 by a1, then around tangent2 by a2
+    // Rodrigues' rotation: rotate baseNormal around angle1Axis by a1, then around angle2Axis by a2
     auto rodrigues = [](const Base::Vector3d& v, const Base::Vector3d& k, double theta) {
         double ct = std::cos(theta);
         double st = std::sin(theta);
         return v * ct + k.Cross(v) * st + k * (k * v) * (1.0 - ct);
     };
 
-    Base::Vector3d n = rodrigues(baseNormal, tangent1, a1);
-    n = rodrigues(n, tangent2, a2);
+    Base::Vector3d n = rodrigues(baseNormal, angle1Axis, a1);
+    n = rodrigues(n, angle2Axis, a2);
 
     double len = n.Length();
     if (len > minUnitMagnitude) {

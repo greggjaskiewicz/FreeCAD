@@ -73,13 +73,12 @@ struct TriangleSoup
 /// Exposed per triangle so the viewer can slice while it walks the scene graph,
 /// without first copying every triangle into a soup - on a large assembly that
 /// copy is hundreds of megabytes and dominates the cost.
-PartExport bool sliceTriangle(
+PartExport std::optional<Segment> planeTriangleIntersection(
     const Base::Vector3d& a,
     const Base::Vector3d& b,
     const Base::Vector3d& c,
     const Base::Vector3d& normal,
-    double offset,
-    Segment& out
+    double offset
 );
 
 /// Every place the plane crosses a triangle, as an unordered segment list.
