@@ -387,117 +387,101 @@ bool SectionCap::isClosed(const std::vector<Base::Vector3d>& loop, double tolera
 }
 
 // Fill the loops with a series of horizontal strips, each strip is filled with a series of quads, which are then triangulated.
-std::vector<SectionCap::Segment> SectionCap::hatchLoops(
-    const std::vector<std::vector<Base::Vector3d>>& loops,
-    const Base::Vector3d& u,
-    const Base::Vector3d& v,
+
+
+
+
+
+std::vector<SectionCap::Segment> SectionCap::hatchTriangles(
+    const TriangleSoup& cap,
+    const Base::Vector3d& levelDir,
     double spacing,
-    double angleRad
+    std::size_t maxSegments
 )
 {
     std::vector<Segment> hatch;
-    if (loops.empty() || !std::isfinite(spacing) || spacing <= 0.0 || !std::isfinite(angleRad)) {
+    if (cap.indices.size() < 3 || cap.points.empty() || !std::isfinite(spacing) || spacing <= 0.0) {
         return hatch;
     }
 
-    // Rotate the in plane frame so the hatch lines come out horizontal; a
-    // scanline is then simply a constant `b`, and the fill is one dimensional.
-    const double c = std::cos(angleRad);
-    const double s = std::sin(angleRad);
-    const Base::Vector3d along = u * c + v * s;
-    const Base::Vector3d across = u * -s + v * c;
+    const double dirLength = levelDir.Length();
+    if (!std::isfinite(dirLength) || dirLength <= 0.0) {
+        return hatch;
+    }
+    const Base::Vector3d dir = levelDir / dirLength;
 
-    // `along` and `across` span the plane but say nothing about how far along
-    // its normal it sits, so that component is taken off a real point and added
-    // back when the hatch is lifted into 3D.
-    Base::Vector3d offsetFromOrigin(0, 0, 0);
-    for (const auto& loop : loops) {
-        if (!loop.empty()) {
-            const Base::Vector3d& p = loop.front();
-            offsetFromOrigin = p - along * (p * along) - across * (p * across);
+    const std::size_t pointCount = cap.points.size();
+
+    for (std::size_t i = 0; i + 2 < cap.indices.size(); i += 3) {
+        if (hatch.size() >= maxSegments) {
             break;
         }
-    }
 
-    // Project once; the scanline sweep below revisits every edge per level.
-    struct Edge
-    {
-        double a0, b0, a1, b1;
-    };
-    std::vector<Edge> edges;
-    double bMin = std::numeric_limits<double>::max();
-    double bMax = std::numeric_limits<double>::lowest();
-    for (const auto& loop : loops) {
-        if (loop.size() < 3) {
-            continue;
-        }
-        for (std::size_t i = 0; i < loop.size(); ++i) {
-            const Base::Vector3d& p = loop[i];
-            const Base::Vector3d& q = loop[(i + 1) % loop.size()];
-            const Edge e {p * along, p * across, q * along, q * across};
-            if (!std::isfinite(e.a0) || !std::isfinite(e.b0) || !std::isfinite(e.a1)
-                || !std::isfinite(e.b1)) {
-                continue;
-            }
-            edges.push_back(e);
-            bMin = std::min({bMin, e.b0, e.b1});
-            bMax = std::max({bMax, e.b0, e.b1});
-        }
-    }
-    if (edges.empty() || bMin > bMax) {
-        return hatch;
-    }
-
-    // A spacing far finer than the section is a mistake, not a request; bound
-    // the sweep while still in floating point, where overflow only saturates.
-    constexpr double maxLines = 200000.0;
-    const double kMinD = std::ceil(bMin / spacing);
-    const double kMaxD = std::floor(bMax / spacing);
-    if (!(kMaxD - kMinD <= maxLines)) {
-        // Refused rather than attempted, and said out loud: returning an empty
-        // hatch silently looks identical to a section that genuinely has none.
-        Base::Console().warning(
-            "SectionAnalysis: hatch spacing of %g would need over %g lines, skipping.\n",
-            spacing,
-            maxLines
-        );
-        return hatch;
-    }
-
-    std::vector<double> crossings;
-    for (auto k = static_cast<std::int64_t>(kMinD); k <= static_cast<std::int64_t>(kMaxD); ++k) {
-        const double level = static_cast<double>(k) * spacing;
-
-        crossings.clear();
-        for (const auto& e : edges) {
-            // Half open test again, so a vertex exactly on the scanline is
-            // counted once. Counting it twice would flip parity back and leave
-            // the span beyond it unfilled.
-            if ((e.b0 > level) == (e.b1 > level)) {
-                continue;
-            }
-            const double t = (level - e.b0) / (e.b1 - e.b0);
-            crossings.push_back(e.a0 + (e.a1 - e.a0) * t);
-        }
-        if (crossings.size() < 2) {
+        const int ia = cap.indices[i];
+        const int ib = cap.indices[i + 1];
+        const int ic = cap.indices[i + 2];
+        if (ia < 0 || ib < 0 || ic < 0 || static_cast<std::size_t>(ia) >= pointCount
+            || static_cast<std::size_t>(ib) >= pointCount
+            || static_cast<std::size_t>(ic) >= pointCount) {
             continue;
         }
 
-        std::sort(crossings.begin(), crossings.end());
-        // Even odd rule: the material lies between the 1st and 2nd crossing,
-        // the 3rd and 4th, and so on, which is what steps over the holes.
-        for (std::size_t i = 0; i + 1 < crossings.size(); i += 2) {
-            if (crossings[i + 1] - crossings[i] <= 0.0) {
+        const Base::Vector3d p[3] = {cap.points[ia], cap.points[ib], cap.points[ic]};
+        const double s[3] = {p[0] * dir, p[1] * dir, p[2] * dir};
+        if (!std::isfinite(s[0]) || !std::isfinite(s[1]) || !std::isfinite(s[2])) {
+            continue;
+        }
+
+        // Only the levels this triangle actually spans, which is what makes the
+        // cost follow the output rather than the level count.
+        const double lowest = std::min({s[0], s[1], s[2]});
+        const double highest = std::max({s[0], s[1], s[2]});
+
+        // Bounded while still in floating point, where overflow saturates
+        // instead of being undefined as an out of range cast would be.
+        const double firstD = std::ceil(lowest / spacing);
+        const double lastD = std::floor(highest / spacing);
+        if (!(lastD >= firstD) || !(lastD - firstD < static_cast<double>(maxSegments))) {
+            continue;
+        }
+
+        for (auto k = static_cast<std::int64_t>(firstD);
+             k <= static_cast<std::int64_t>(lastD);
+             ++k) {
+            if (hatch.size() >= maxSegments) {
+                break;
+            }
+            const double level = static_cast<double>(k) * spacing;
+
+            // Half open sign test, as everywhere else here: a triangle yields
+            // exactly zero or two crossings, so a vertex sitting on a hatch
+            // line cannot produce a duplicate or a dangling segment.
+            const bool above[3] = {s[0] > level, s[1] > level, s[2] > level};
+            if (above[0] == above[1] && above[1] == above[2]) {
                 continue;
             }
-            hatch.push_back(
-                Segment {offsetFromOrigin + along * crossings[i] + across * level,
-                         offsetFromOrigin + along * crossings[i + 1] + across * level}
-            );
+
+            Base::Vector3d hit[2];
+            int hits = 0;
+            for (int e = 0; e < 3 && hits < 2; ++e) {
+                const int a = e;
+                const int b = (e + 1) % 3;
+                if (above[a] == above[b]) {
+                    continue;
+                }
+                const double t = (level - s[a]) / (s[b] - s[a]);
+                hit[hits++] = p[a] + (p[b] - p[a]) * t;
+            }
+            // A triangle touching the line at one vertex gives two crossings
+            // that collapse onto it. That is a touch, not a crossing, and a
+            // zero length line would only be drawn as nothing.
+            if (hits != 2 || Base::DistanceP2(hit[0], hit[1]) <= 0.0) {
+                continue;
+            }
+
+            hatch.push_back(Segment {hit[0], hit[1]});
         }
     }
 
     return hatch;
 }
-
-

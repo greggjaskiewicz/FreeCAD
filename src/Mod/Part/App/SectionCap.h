@@ -96,7 +96,7 @@ chainLoops(const std::vector<Segment>& segments, double tolerance);
 
 /// A solid cap covering the region enclosed by `loops`, as triangles.
 ///
-/// Uses the same scanline parity as `hatchLoops`, so holes are excluded without
+/// Uses a scanline parity sweep, so holes are excluded without
 /// ever being identified as holes - which is what makes this possible without a
 /// polygon triangulator. The region is tiled by strips `stripHeight` tall, each
 /// strip emitting one quad per span, so adjacent strips meet exactly and leave
@@ -138,22 +138,17 @@ extentAlong(const Base::BoundBox3d& bounds, const Base::Vector3d& normal, double
 /// True if the loop's first and last point meet within `tolerance`.
 PartExport bool isClosed(const std::vector<Base::Vector3d>& loop, double tolerance);
 
-/// Hatch lines filling the region enclosed by `loops`, spaced `spacing` apart
-/// and running at `angleRad` within the plane's own frame.
+/// Hatch lines across a cap that is already triangulated.
 ///
-/// This is a scanline fill against the loops themselves, so no triangulation of
-/// the cross section is needed - which matters because triangulating a region
-/// with holes is exactly the hard part. Parity along each scanline sorts inside
-/// from outside, so holes are excluded without ever being identified as holes.
-///
-/// `u` and `v` are the in plane axes; loops that do not close are closed
-/// implicitly, since a fill is only meaningful against a closed boundary.
-PartExport std::vector<Segment> hatchLoops(
-    const std::vector<std::vector<Base::Vector3d>>& loops,
-    const Base::Vector3d& u,
-    const Base::Vector3d& v,
+/// Every triangle is material, so any crossing is inside - no parity, no closed
+/// boundary needed. `levelDir` is the direction the lines march along: a line
+/// is the points with `p * levelDir == k * spacing`, on an absolute grid so
+/// neighbouring bodies stay in step.
+PartExport std::vector<Segment> hatchTriangles(
+    const TriangleSoup& cap,
+    const Base::Vector3d& levelDir,
     double spacing,
-    double angleRad
+    std::size_t maxSegments = 500000
 );
 
 }  // namespace SectionCap

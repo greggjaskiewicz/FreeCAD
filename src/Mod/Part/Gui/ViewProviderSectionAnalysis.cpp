@@ -404,6 +404,14 @@ void ViewProviderSectionAnalysis::attach(App::DocumentObject* pcFeat)
     hatchBind->value = SoMaterialBinding::OVERALL;
     hatchRoot->addChild(hatchBind);
 
+    // The hatch lines lie exactly on the section faces, so they z-fight with them.
+    auto* hatchOffset = new SoPolygonOffset();
+    hatchOffset->factor = -1.0F;
+    hatchOffset->units = -1.0F;
+    hatchOffset->styles = SoPolygonOffset::LINES;
+    hatchOffset->on = TRUE;
+    hatchRoot->addChild(hatchOffset);
+
     hatchStyle = new SoDrawStyle();
     hatchStyle->style = SoDrawStyle::LINES;
     hatchStyle->lineWidth.setValue(static_cast<float>(HatchLineWidth.getValue()));
@@ -893,7 +901,10 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
             // A different angle per body, so neighbouring parts stay legible
             // where their sections meet.
             const double angle = std::numbers::pi / 4.0 + (std::numbers::pi / 6.0) * (index % 6);
-            const auto hatch = Part::SectionCap::hatchLoops(loops, u, v, spacing, angle);
+            // Hatching the cap triangles rather than the loops, so both result
+            // modes go through one implementation.
+            const Base::Vector3d levelDir = u * -std::sin(angle) + v * std::cos(angle);
+            const auto hatch = Part::SectionCap::hatchTriangles(fill, levelDir, spacing);
             for (const auto& seg : hatch) {
                 lineIndex.push_back(static_cast<int32_t>(points.size()));
                 points.emplace_back(static_cast<float>(seg.start.x),
@@ -1309,30 +1320,8 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
         return;
     }
 
-    // The section faces lie exactly on the cutting plane, so the lines would
-    // z-fight with them. Lift them by a fraction of the model size towards the
-    // cut-away side, i.e. the side the section face is looked at from.
-    Base::Vector3d cutNormal;
-    double cutOffset = 0.0;
-    if (!feat->cutPlane(cutNormal, cutOffset)) {
-        return;
-    }
-    double modelSize = 1.0;
-    if (sourceBBoxValid) {
-        const double dx = sourceBBox[3] - sourceBBox[0];
-        const double dy = sourceBBox[4] - sourceBBox[1];
-        const double dz = sourceBBox[5] - sourceBBox[2];
-        modelSize = std::max(std::sqrt(dx * dx + dy * dy + dz * dz), 1.0);
-    }
-    // Proportional to the model, not a tolerance: enough to clear the section
-    // face in the depth buffer at any scale.
-    constexpr double zFightingLift = 1e-4;
-    const Base::Vector3d lift = cutNormal * (modelSize * zFightingLift);
-
-    // Walk the tessellation of the section faces and slice every triangle with
-    // the family of hatch lines (marching triangles). Using the triangles the
-    // viewer already renders means the hatching is trimmed to exactly the same
-    // outline as the visible faces, with no extra shape/boolean work.
+    // The triangles the viewer already renders, so the hatching is trimmed to
+    // exactly the same outline as the visible faces.
     const int numPts = coords->point.getNum();
     const int numIdx = faceset->coordIndex.getNum();
     if (numPts < 3 || numIdx < 4) {
@@ -1341,84 +1330,13 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
     const SbVec3f* pts = coords->point.getValues(0);
     const int32_t* cidx = faceset->coordIndex.getValues(0);
 
-    // Guard against a pathologically small spacing eating all the memory
-    constexpr int maxSegments = 500000;
-
-    std::vector<SbVec3f> segPts;
-    std::vector<int32_t> segIdx;
-
-    // How far the hatched region reaches across the lines, i.e. how many lines
-    // there are - the fade thresholds below are derived from it
-    double spanMin = std::numeric_limits<double>::max();
-    double spanMax = std::numeric_limits<double>::lowest();
-
-    // If there is an easier way to do this already existing in FreeCAD codebase,
-    // I could not find it...
-    auto planeTriangleIntersection = [&](int32_t ia, int32_t ib, int32_t ic) {
-        const Base::Vector3d p[3] = {
-            Base::Vector3d(pts[ia][0], pts[ia][1], pts[ia][2]),
-            Base::Vector3d(pts[ib][0], pts[ib][1], pts[ib][2]),
-            Base::Vector3d(pts[ic][0], pts[ic][1], pts[ic][2])
-        };
-        const double s[3] = {p[0] * levelDir, p[1] * levelDir, p[2] * levelDir};
-
-        const double smin = std::min({s[0], s[1], s[2]});
-        const double smax = std::max({s[0], s[1], s[2]});
-        spanMin = std::min(spanMin, smin);
-        spanMax = std::max(spanMax, smax);
-        // Bound the range while it is still floating point, where overflow only
-        // saturates: an out-of-range float to integer cast is undefined
-        // behaviour, and `long` is 32 bit on Windows
-        const double kminD = std::ceil(smin / spacing);
-        const double kmaxD = std::floor(smax / spacing);
-        if (!(kmaxD - kminD <= maxSegments)) {
-            return;
-        }
-        const auto kmin = static_cast<std::int64_t>(kminD);
-        const auto kmax = static_cast<std::int64_t>(kmaxD);
-
-        for (std::int64_t k = kmin; k <= kmax; ++k) {
-            const double level = static_cast<double>(k) * spacing;
-            // Half-open sign test: every triangle yields exactly 0 or 2
-            // crossings, so vertices sitting on a hatch line can't produce
-            // duplicate or dangling segments.
-            const bool above[3] = {s[0] > level, s[1] > level, s[2] > level};
-
-            Base::Vector3d hit[2];
-            int numHits = 0;
-            for (int e = 0; e < 3 && numHits < 2; ++e) {
-                const int a = e;
-                const int b = (e + 1) % 3;
-                if (above[a] == above[b]) {
-                    continue;
-                }
-                const double t = (level - s[a]) / (s[b] - s[a]);
-                hit[numHits++] = p[a] + (p[b] - p[a]) * t;
-            }
-            if (numHits < 2) {
-                continue;
-            }
-            if (static_cast<int>(segIdx.size()) / 3 >= maxSegments) {
-                return;
-            }
-
-            const auto base = static_cast<int32_t>(segPts.size());
-            for (auto& h : hit) {
-                const Base::Vector3d q = h + lift;
-                segPts.emplace_back(
-                    static_cast<float>(q.x),
-                    static_cast<float>(q.y),
-                    static_cast<float>(q.z)
-                );
-            }
-            segIdx.push_back(base);
-            segIdx.push_back(base + 1);
-            segIdx.push_back(SO_END_LINE_INDEX);
-        }
-    };
-
     // SoBrepFaceSet stores triangles as {i0, i1, i2, -1}, but parse generically
     // (fan-triangulating any polygon) so this survives a different tesselation.
+    Part::SectionCap::TriangleSoup cap;
+    cap.points.reserve(static_cast<std::size_t>(numPts));
+    for (int i = 0; i < numPts; ++i) {
+        cap.points.emplace_back(pts[i][0], pts[i][1], pts[i][2]);
+    }
     std::vector<int32_t> poly;
     poly.reserve(4);
     for (int i = 0; i <= numIdx; ++i) {
@@ -1429,10 +1347,42 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
             }
             continue;
         }
-        for (size_t j = 2; j < poly.size(); ++j) {
-            planeTriangleIntersection(poly[0], poly[j - 1], poly[j]);
+        for (std::size_t j = 2; j < poly.size(); ++j) {
+            cap.indices.push_back(poly[0]);
+            cap.indices.push_back(poly[j - 1]);
+            cap.indices.push_back(poly[j]);
         }
         poly.clear();
+    }
+
+    // How far the region reaches across the lines, i.e. how many lines there
+    // are - the fade thresholds below are derived from it.
+    double spanMin = std::numeric_limits<double>::max();
+    double spanMax = std::numeric_limits<double>::lowest();
+    for (const auto& point : cap.points) {
+        const double level = point * levelDir;
+        spanMin = std::min(spanMin, level);
+        spanMax = std::max(spanMax, level);
+    }
+
+    constexpr std::size_t maxSegments = 500000;
+    const auto hatch = Part::SectionCap::hatchTriangles(cap, levelDir, spacing, maxSegments);
+
+    std::vector<SbVec3f> segPts;
+    std::vector<int32_t> segIdx;
+    segPts.reserve(hatch.size() * 2);
+    segIdx.reserve(hatch.size() * 3);
+    for (const auto& seg : hatch) {
+        const auto base = static_cast<int32_t>(segPts.size());
+        segPts.emplace_back(static_cast<float>(seg.start.x),
+                            static_cast<float>(seg.start.y),
+                            static_cast<float>(seg.start.z));
+        segPts.emplace_back(static_cast<float>(seg.end.x),
+                            static_cast<float>(seg.end.y),
+                            static_cast<float>(seg.end.z));
+        segIdx.push_back(base);
+        segIdx.push_back(base + 1);
+        segIdx.push_back(SO_END_LINE_INDEX);
     }
 
     if (segPts.empty()) {
@@ -1675,8 +1625,10 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
         // back, so the gizmo has to follow
         syncDraggerPlacement();
         if (prop == &feat->PlaneNormal || prop == &feat->FlipCut) {
-            // Direction of the 45 deg pattern and the side the lines are lifted
-            // towards both follow the plane orientation
+            // The direction of the 45 deg pattern follows the plane orientation.
+            // FlipCut no longer changes anything here - the lines used to be
+            // lifted towards the cut-away side, and are now offset in the depth
+            // buffer instead - so that half of the condition is redundant.
             updateHatchGeometry();
         }
         // The scene graph cap is re-sliced for any plane change, offset

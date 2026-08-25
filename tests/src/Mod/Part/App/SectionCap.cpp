@@ -296,121 +296,6 @@ double totalLength(const std::vector<Segment>& segments)
 
 }  // namespace
 
-TEST(SectionCapHatch, testASquareIsFilledWithEvenlySpacedLines)
-{
-    // Arrange - a 10 x 10 square, hatched horizontally every 1 mm
-    const std::vector<std::vector<Base::Vector3d>> loops = {square(0, 0, 10)};
-
-    // Act
-    const auto hatch = hatchLoops(loops, U, V, 1.0, 0.0);
-
-    // Assert - the half open test puts a scanline on the lower boundary but not
-    // the upper, so y runs 0..9: 10 lines, each spanning the full 10 mm width
-    ASSERT_EQ(hatch.size(), 10);
-    for (const auto& s : hatch) {
-        EXPECT_NEAR(Base::Distance(s.start, s.end), 10.0, 1e-9);
-    }
-}
-
-TEST(SectionCapHatch, testAHoleIsLeftUnhatched)
-{
-    // Arrange - a 10 x 10 square with a 4 x 4 hole in the middle
-    const std::vector<std::vector<Base::Vector3d>> loops = {square(0, 0, 10), square(3, 3, 4)};
-
-    // Act
-    const auto hatch = hatchLoops(loops, U, V, 1.0, 0.0);
-
-    // Assert - of the 10 scanlines the square gets, the 4 at y = 3..6 run
-    // through the hole and give up 4 mm each
-    EXPECT_NEAR(totalLength(hatch), 10 * 10.0 - 4 * 4.0, 1e-9);
-}
-
-TEST(SectionCapHatch, testNoHatchLineEntersTheHole)
-{
-    const std::vector<std::vector<Base::Vector3d>> loops = {square(0, 0, 10), square(3, 3, 4)};
-
-    const auto hatch = hatchLoops(loops, U, V, 1.0, 0.0);
-
-    // a segment spanning the hole would have to start left of it and end right
-    for (const auto& s : hatch) {
-        const bool spansHole = std::min(s.start.x, s.end.x) < 3.0
-            && std::max(s.start.x, s.end.x) > 7.0 && s.start.y >= 3.0 && s.start.y < 7.0;
-        EXPECT_FALSE(spansHole) << "hatch crossed the hole at y = " << s.start.y;
-    }
-}
-
-TEST(SectionCapHatch, testTheAngleRotatesTheLines)
-{
-    const std::vector<std::vector<Base::Vector3d>> loops = {square(0, 0, 10)};
-
-    const auto flat = hatchLoops(loops, U, V, 2.0, 0.0);
-    const auto tilted = hatchLoops(loops, U, V, 2.0, M_PI / 4.0);
-
-    // Assert - horizontal lines stay at constant y, 45 deg ones do not.
-    // This is what lets two bodies be told apart by their hatch direction.
-    ASSERT_FALSE(flat.empty());
-    ASSERT_FALSE(tilted.empty());
-    for (const auto& s : flat) {
-        EXPECT_NEAR(s.start.y, s.end.y, 1e-9);
-    }
-    bool anySlanted = false;
-    for (const auto& s : tilted) {
-        anySlanted = anySlanted || std::abs(s.start.y - s.end.y) > 1e-6;
-    }
-    EXPECT_TRUE(anySlanted);
-}
-
-TEST(SectionCapHatch, testHatchStaysOnTheLoopsOwnPlane)
-{
-    // Arrange - the same square, but lifted to z = 7
-    auto loop = square(0, 0, 10);
-    for (auto& p : loop) {
-        p.z = 7.0;
-    }
-
-    // Act
-    const auto hatch = hatchLoops({loop}, U, V, 1.0, 0.0);
-
-    // Assert - the in-plane axes say nothing about the offset along the normal,
-    // so it has to be carried across explicitly or the hatch lands at z = 0
-    ASSERT_FALSE(hatch.empty());
-    for (const auto& s : hatch) {
-        EXPECT_NEAR(s.start.z, 7.0, 1e-9);
-        EXPECT_NEAR(s.end.z, 7.0, 1e-9);
-    }
-}
-
-TEST(SectionCapHatch, testHatchingRunsFromTheSlicedGeometry)
-{
-    // Arrange - the whole chain, exactly as the view provider drives it
-    const auto loops = chainLoops(sliceTriangles(box(10), Z, 5.0), 1e-7);
-    ASSERT_EQ(loops.size(), 1);
-
-    // Act
-    const auto hatch = hatchLoops(loops, U, V, 1.0, M_PI / 4.0);
-
-    // Assert - a 10 x 10 cross section hatched at 1 mm has to produce something
-    EXPECT_FALSE(hatch.empty());
-    EXPECT_GT(totalLength(hatch), 0.0);
-}
-
-TEST(SectionCapHatch, testNonsenseSpacingIsRefusedRatherThanExhaustingMemory)
-{
-    const std::vector<std::vector<Base::Vector3d>> loops = {square(0, 0, 10)};
-
-    EXPECT_TRUE(hatchLoops(loops, U, V, 0.0, 0.0).empty());
-    EXPECT_TRUE(hatchLoops(loops, U, V, -1.0, 0.0).empty());
-    EXPECT_TRUE(hatchLoops(loops, U, V, std::nan(""), 0.0).empty());
-    EXPECT_TRUE(hatchLoops(loops, U, V, 1.0, std::nan("")).empty());
-    // 10 mm of section at 1e-9 spacing is ten billion lines - refuse it
-    EXPECT_TRUE(hatchLoops(loops, U, V, 1e-9, 0.0).empty());
-}
-
-TEST(SectionCapHatch, testNoLoopsGiveNoHatch)
-{
-    EXPECT_TRUE(hatchLoops({}, U, V, 1.0, 0.0).empty());
-}
-
 TEST(SectionCapFill, testASquareIsFilledWithItsOwnArea)
 {
     // Arrange - a 10 x 10 square
@@ -563,16 +448,6 @@ TEST(SectionCapFill, testDegenerateLoopsFillNothing)
     EXPECT_TRUE(fillLoops(degenerate, U, V, stripsAcross(10.0, 100)).indices.empty());
 }
 
-TEST(SectionCapHatch, testDegenerateLoopsHatchNothing)
-{
-    using Vec = Base::Vector3d;
-    const std::vector<std::vector<Base::Vector3d>> degenerate = {
-        {Vec(0, 0, 0), Vec(10, 0, 0)},
-    };
-
-    EXPECT_TRUE(hatchLoops(degenerate, U, V, 1.0, 0.0).empty());
-}
-
 TEST(SectionCapFill, testAFlatRegionFillsNothing)
 {
     // Every point on one line: there is no area to fill, and the strip height
@@ -601,4 +476,188 @@ TEST(SectionCapFill, testNotANumberInALoopIsSkippedRatherThanPoisoningTheFill)
         EXPECT_TRUE(std::isfinite(p.z));
     }
 }
+
+// --- hatching a triangulated cap -----------------------------------------
+//
+// Both result modes come through here: Geometry mode has triangles from OCCT,
+// Display mode gets them from fillLoops.
+
+namespace
+{
+/// A square as two triangles, so the tests below start from a cap rather than
+/// from a boundary.
+TriangleSoup squareSoup(double x0, double y0, double size)
+{
+    TriangleSoup soup;
+    soup.points = {Base::Vector3d(x0, y0, 0),
+                   Base::Vector3d(x0 + size, y0, 0),
+                   Base::Vector3d(x0 + size, y0 + size, 0),
+                   Base::Vector3d(x0, y0 + size, 0)};
+    soup.indices = {0, 1, 2, 0, 2, 3};
+    return soup;
+}
+}  // namespace
+
+TEST(SectionCapHatchTriangles, testASquareCapIsFilledWithEvenlySpacedLines)
+{
+    // Arrange - the same 10 x 10 square the loop based tests use, but already
+    // triangulated, hatched horizontally every 1 mm
+    const auto cap = squareSoup(0, 0, 10);
+
+    // Act - lines march along Y, so a line is a set of points with constant y
+    const auto hatch = hatchTriangles(cap, V, 1.0);
+
+    // Assert - each level crosses both triangles, so it arrives in two pieces
+    // rather than one. Total length is what matters, not the count.
+    EXPECT_NEAR(totalLength(hatch), 10 * 10.0, 1e-9);
+}
+
+TEST(SectionCapHatchTriangles, testAHoleIsLeftUnhatchedWithoutBeingIdentified)
+{
+    // Arrange - a square cap with the middle left untriangulated. There is no
+    // hole loop anywhere; the hole is simply an absence of triangles, which is
+    // the whole point of this path.
+    TriangleSoup cap = squareSoup(0, 0, 10);
+    const auto missing = squareSoup(3, 3, 4);
+    // subtract by rebuilding the ring around the missing middle as four bands
+    cap.points.clear();
+    cap.indices.clear();
+    auto addQuad = [&cap](double x0, double y0, double w, double h) {
+        const auto base = static_cast<int>(cap.points.size());
+        cap.points.push_back(Base::Vector3d(x0, y0, 0));
+        cap.points.push_back(Base::Vector3d(x0 + w, y0, 0));
+        cap.points.push_back(Base::Vector3d(x0 + w, y0 + h, 0));
+        cap.points.push_back(Base::Vector3d(x0, y0 + h, 0));
+        for (int i : {0, 1, 2, 0, 2, 3}) {
+            cap.indices.push_back(base + i);
+        }
+    };
+    addQuad(0, 0, 10, 3);   // below the hole
+    addQuad(0, 7, 10, 3);   // above it
+    addQuad(0, 3, 3, 4);    // left of it
+    addQuad(7, 3, 3, 4);    // right of it
+
+    // Act
+    const auto hatch = hatchTriangles(cap, V, 1.0);
+
+    // Assert - the same 100 - 16 the loop based version gives for a hole
+    EXPECT_NEAR(totalLength(hatch), 10 * 10.0 - 4 * 4.0, 1e-9);
+
+    // and nothing crosses where the triangles are missing
+    for (const auto& s : hatch) {
+        const bool spansHole = std::min(s.start.x, s.end.x) < 3.0
+            && std::max(s.start.x, s.end.x) > 7.0 && s.start.y >= 3.0 && s.start.y < 7.0;
+        EXPECT_FALSE(spansHole) << "hatch crossed the gap at y = " << s.start.y;
+    }
+}
+
+TEST(SectionCapHatchTriangles, testTheDirectionSetsTheAngle)
+{
+    const auto cap = squareSoup(0, 0, 10);
+
+    // Marching along X instead of Y turns the pattern a quarter turn. The
+    // square is symmetric, so the same length arrives either way - what changes
+    // is which coordinate the lines hold constant.
+    const auto acrossY = hatchTriangles(cap, V, 1.0);
+    const auto acrossX = hatchTriangles(cap, U, 1.0);
+
+    EXPECT_NEAR(totalLength(acrossY), totalLength(acrossX), 1e-9);
+    for (const auto& s : acrossY) {
+        EXPECT_NEAR(s.start.y, s.end.y, 1e-9) << "lines marching along V must hold y";
+    }
+    for (const auto& s : acrossX) {
+        EXPECT_NEAR(s.start.x, s.end.x, 1e-9) << "lines marching along U must hold x";
+    }
+}
+
+TEST(SectionCapHatchTriangles, testTheGridIsAbsoluteNotPerBody)
+{
+    // Two caps at different places must put their lines on the same grid, or
+    // neighbouring parts in an assembly would hatch out of step with each
+    // other. Absolute multiples of the spacing are what guarantee it.
+    const auto near = squareSoup(0, 0, 10);
+    const auto far = squareSoup(100, 40, 10);
+
+    const auto hatchNear = hatchTriangles(near, V, 2.0);
+    const auto hatchFar = hatchTriangles(far, V, 2.0);
+
+    ASSERT_FALSE(hatchNear.empty());
+    ASSERT_FALSE(hatchFar.empty());
+    for (const auto& s : hatchNear) {
+        EXPECT_NEAR(std::fmod(s.start.y, 2.0), 0.0, 1e-9);
+    }
+    for (const auto& s : hatchFar) {
+        EXPECT_NEAR(std::fmod(s.start.y, 2.0), 0.0, 1e-9);
+    }
+}
+
+TEST(SectionCapHatchTriangles, testACapLyingOffTheOriginKeepsItsPlane)
+{
+    // The cap need not sit at z = 0; whatever plane the triangles are on, the
+    // hatch has to come back on that same plane rather than at the origin.
+    TriangleSoup cap = squareSoup(0, 0, 10);
+    for (auto& p : cap.points) {
+        p.z = 7.0;
+    }
+
+    const auto hatch = hatchTriangles(cap, V, 1.0);
+
+    ASSERT_FALSE(hatch.empty());
+    for (const auto& s : hatch) {
+        EXPECT_NEAR(s.start.z, 7.0, 1e-9);
+        EXPECT_NEAR(s.end.z, 7.0, 1e-9);
+    }
+}
+
+TEST(SectionCapHatchTriangles, testATriangleTouchingALineAtOneVertexIsNotADash)
+{
+    // Two crossings collapse onto the vertex, which is a touch rather than a
+    // crossing. A zero length segment would be drawn as nothing at best and
+    // confuse a consumer at worst.
+    TriangleSoup cap;
+    cap.points = {Base::Vector3d(0, 0, 0), Base::Vector3d(4, 0, 0), Base::Vector3d(2, 3, 0)};
+    cap.indices = {0, 1, 2};
+
+    // spacing of 3 puts a line exactly on the apex
+    const auto hatch = hatchTriangles(cap, V, 3.0);
+
+    for (const auto& s : hatch) {
+        EXPECT_GT(Base::Distance(s.start, s.end), 0.0) << "emitted a zero length hatch line";
+    }
+}
+
+TEST(SectionCapHatchTriangles, testNonsenseInputIsRefused)
+{
+    const auto cap = squareSoup(0, 0, 10);
+
+    EXPECT_TRUE(hatchTriangles({}, V, 1.0).empty());
+    EXPECT_TRUE(hatchTriangles(cap, V, 0.0).empty());
+    EXPECT_TRUE(hatchTriangles(cap, V, -1.0).empty());
+    // a direction of no length gives no direction to march
+    EXPECT_TRUE(hatchTriangles(cap, Base::Vector3d(0, 0, 0), 1.0).empty());
+}
+
+TEST(SectionCapHatchTriangles, testAnAbsurdlyFineSpacingIsBounded)
+{
+    // A spacing far below the geometry is a mistake, not a request. The bound
+    // has to hold rather than the call trying to allocate its way through it.
+    const auto cap = squareSoup(0, 0, 10);
+
+    const auto hatch = hatchTriangles(cap, V, 1e-9, 500);
+
+    EXPECT_LE(hatch.size(), 500u);
+}
+
+TEST(SectionCapHatchTriangles, testABadIndexIsSkippedNotDereferenced)
+{
+    TriangleSoup cap = squareSoup(0, 0, 10);
+    cap.indices.push_back(0);
+    cap.indices.push_back(1);
+    cap.indices.push_back(99);  // past the end
+
+    // the valid triangles still hatch, and the broken one is simply not visited
+    const auto hatch = hatchTriangles(cap, V, 1.0);
+    EXPECT_NEAR(totalLength(hatch), 10 * 10.0, 1e-9);
+}
+
 // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
