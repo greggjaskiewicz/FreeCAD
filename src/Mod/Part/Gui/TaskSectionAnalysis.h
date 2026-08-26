@@ -79,7 +79,6 @@ public:
     bool reject();
     Part::SectionAnalysis* getObject() const;
     ViewProviderSectionAnalysis* getViewProvider() const;
-    void updateFromFeature();
 
 private:
     void setupUi();
@@ -177,7 +176,6 @@ public:
     bool accept() override;
     bool reject() override;
     Part::SectionAnalysis* getObject() const;
-    void updateFromFeature();
 
     QDialogButtonBox::StandardButtons getStandardButtons() const override
     {

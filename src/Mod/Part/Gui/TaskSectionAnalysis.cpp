@@ -823,64 +823,6 @@ void SectionAnalysisWidget::recompute()
     }
 }
 
-void SectionAnalysisWidget::updateFromFeature()
-{
-    // Sync controls from the feature without triggering signals; decomposes
-    // the normal into angles relative to the current preset.
-    Base::Vector3d n = feature->PlaneNormal.getValue();
-    bool flip = feature->FlipCut.getValue();
-
-    const QSignalBlocker blockFlip(flipCheck);
-    const QSignalBlocker blockAngle1(angle1Spin);
-    const QSignalBlocker blockAngle2(angle2Spin);
-    const QSignalBlocker blockOffset(offsetSpin);
-
-    flipCheck->setChecked(flip);
-
-    // Decompose the current normal into angles relative to the current preset.
-    // This is the exact inverse of the Rodrigues rotation in applyAngles().
-    switch (static_cast<Preset>(presetCombo->currentIndex())) {
-        case Preset::XY: {  // Z normal
-            // Forward: n = (cosA*sinB, sinA, cosA*cosB)
-            Base::Vector3d ne = (n.z < 0) ? -n : n;
-            double alpha = std::asin(std::clamp(ne.y, -1.0, 1.0));
-            double cosA = std::cos(alpha);
-            double beta = (cosA > minUnitMagnitude) ? std::atan2(ne.x, ne.z) : 0.0;
-            angle1Spin->setValue(alpha * 180.0 / std::numbers::pi);
-            angle2Spin->setValue(beta * 180.0 / std::numbers::pi);
-            break;
-        }
-        case Preset::XZ: {  // Y normal
-            // Forward: n = (-cosA*sinB, cosA*cosB, -sinA)
-            Base::Vector3d ne = (n.y < 0) ? -n : n;
-            double alpha = std::asin(std::clamp(-ne.z, -1.0, 1.0));
-            double cosA = std::cos(alpha);
-            double beta = (cosA > minUnitMagnitude) ? std::atan2(-ne.x, ne.y) : 0.0;
-            angle1Spin->setValue(alpha * 180.0 / std::numbers::pi);
-            angle2Spin->setValue(beta * 180.0 / std::numbers::pi);
-            break;
-        }
-        case Preset::YZ: {  // X normal
-            // Forward: n = (cosA*cosB, cosA*sinB, sinA)
-            Base::Vector3d ne = (n.x < 0) ? -n : n;
-            double alpha = std::asin(std::clamp(ne.z, -1.0, 1.0));
-            double cosA = std::cos(alpha);
-            double beta = (cosA > minUnitMagnitude) ? std::atan2(ne.y, ne.x) : 0.0;
-            angle1Spin->setValue(alpha * 180.0 / std::numbers::pi);
-            angle2Spin->setValue(beta * 180.0 / std::numbers::pi);
-            break;
-        }
-        default:
-            break;  // No preset, or view direction: leave angles as-is
-    }
-
-    // The offset box is part of the same picture, and the arrow gizmo reads it
-    offsetSpin->setValue(feature->PlaneOffset.getValue());
-
-    // The plane has moved, so the handles have to follow it
-    setGizmoPositions();
-}
-
 bool SectionAnalysisWidget::accept()
 {
     try {
@@ -949,12 +891,6 @@ TaskSectionAnalysis::~TaskSectionAnalysis() = default;
 Part::SectionAnalysis* TaskSectionAnalysis::getObject() const
 {
     return widget->getObject();
-}
-
-
-void TaskSectionAnalysis::updateFromFeature()
-{
-    widget->updateFromFeature();
 }
 
 bool TaskSectionAnalysis::accept()
