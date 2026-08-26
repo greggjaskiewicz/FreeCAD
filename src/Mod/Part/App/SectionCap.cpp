@@ -39,23 +39,27 @@ using namespace Part;
 namespace
 {
 
-/// Quantised point key, so endpoints that agree only to within the mesh
-/// tolerance still land in the same bucket.
-struct GridKey
+/// When slicing, segments are scattered without a clear order. 
+/// ChainLoops must repeatedly determine the end of each unused segment.
+/// Each scan is inefficient, like a quadratic search. To simplify, we store endpoints by position. 
+/// A point is rounded to a cell tolerance wide. Instead of checking every cell, we look for nearby ones. 
+/// The cell narrows down possibilities, but the exact distance test determines a match.
+
+struct EndpointCell
 {
     long long x = 0;
     long long y = 0;
     long long z = 0;
 
-    bool operator==(const GridKey& other) const
+    bool operator==(const EndpointCell& other) const
     {
         return x == other.x && y == other.y && z == other.z;
     }
 };
 
-struct GridKeyHash
+struct EndpointCellHash
 {
-    std::size_t operator()(const GridKey& k) const noexcept
+    std::size_t operator()(const EndpointCell& k) const noexcept
     {
         // three way mix, adequate for the handful of points a section produces
         std::size_t h = std::hash<long long> {}(k.x);
@@ -65,22 +69,25 @@ struct GridKeyHash
     }
 };
 
-GridKey keyOf(const Base::Vector3d& p, double tolerance)
+EndpointCell cellOf(const Base::Vector3d& p, double tolerance)
 {
     const double inv = 1.0 / tolerance;
-    return GridKey {static_cast<long long>(std::llround(p.x * inv)),
+    return EndpointCell {static_cast<long long>(std::llround(p.x * inv)),
                     static_cast<long long>(std::llround(p.y * inv)),
                     static_cast<long long>(std::llround(p.z * inv))};
 }
 
-/// The eight cells around a point, so a lookup still finds a partner that
-/// quantised to an adjacent bucket.
-void forEachNeighbourKey(const GridKey& k, const std::function<void(const GridKey&)>& fn)
+/// The 27 cells enclosing a point - itself and its 26 neighbours - so a lookup
+/// still finds a partner that rounded into an adjacent cell.
+void forEachNeighbouringCell(
+    const EndpointCell& cell,
+    const std::function<void(const EndpointCell&)>& fn
+)
 {
     for (long long dx = -1; dx <= 1; ++dx) {
         for (long long dy = -1; dy <= 1; ++dy) {
             for (long long dz = -1; dz <= 1; ++dz) {
-                fn(GridKey {k.x + dx, k.y + dy, k.z + dz});
+                fn(EndpointCell {cell.x + dx, cell.y + dy, cell.z + dz});
             }
         }
     }
@@ -177,12 +184,12 @@ SectionCap::chainLoops(const std::vector<Segment>& segments, double tolerance)
         return loops;
     }
 
-    // endpoint bucket -> segments touching it, so growing a chain is a lookup
-    // rather than a scan over everything still unused
-    std::unordered_map<GridKey, std::vector<std::size_t>, GridKeyHash> buckets;
+    // Every segment filed under the cell of each of its two ends, so growing a
+    // chain is a lookup rather than a scan over everything still unused.
+    std::unordered_map<EndpointCell, std::vector<std::size_t>, EndpointCellHash> segmentsByEndpoint;
     for (std::size_t i = 0; i < segments.size(); ++i) {
-        buckets[keyOf(segments[i].start, tolerance)].push_back(i);
-        buckets[keyOf(segments[i].end, tolerance)].push_back(i);
+        segmentsByEndpoint[cellOf(segments[i].start, tolerance)].push_back(i);
+        segmentsByEndpoint[cellOf(segments[i].end, tolerance)].push_back(i);
     }
 
     std::vector<bool> used(segments.size(), false);
@@ -190,12 +197,12 @@ SectionCap::chainLoops(const std::vector<Segment>& segments, double tolerance)
 
     auto findNext = [&](const Base::Vector3d& from) -> std::size_t {
         std::size_t found = segments.size();
-        forEachNeighbourKey(keyOf(from, tolerance), [&](const GridKey& k) {
+        forEachNeighbouringCell(cellOf(from, tolerance), [&](const EndpointCell& k) {
             if (found != segments.size()) {
                 return;
             }
-            auto it = buckets.find(k);
-            if (it == buckets.end()) {
+            auto it = segmentsByEndpoint.find(k);
+            if (it == segmentsByEndpoint.end()) {
                 return;
             }
             for (std::size_t idx : it->second) {
