@@ -436,7 +436,7 @@ void ViewProviderSectionAnalysis::attach(App::DocumentObject* pcFeat)
 
     hatchSwitch = new SoSwitch();
     hatchSwitch->addChild(hatchLod);
-    hatchSwitch->whichChild = (hatchEnabled && Visibility.getValue()) ? SO_SWITCH_ALL
+    hatchSwitch->whichChild = (hatchingEnabled() && Visibility.getValue()) ? SO_SWITCH_ALL
                                                                         : SO_SWITCH_NONE;
     pcRoot->addChild(hatchSwitch);
 
@@ -727,7 +727,7 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
     Part::SectionAnalysis::planeFrame(n, u, v);
 
     const double spacing = HatchSpacing.getValue();
-    const bool wantHatch = hatchEnabled && std::isfinite(spacing) && spacing >= minHatchSpacing;
+    const bool wantHatch = hatchingEnabled() && std::isfinite(spacing) && spacing >= minHatchSpacing;
 
     // Deliberately far looser than Precision::Confusion(). Coin holds vertices
     // as float, so points on a half metre part agree only to about 1e-4 mm;
@@ -799,7 +799,7 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
         // section's own appearance, so the colour property still means something
         // in Display mode.
         const auto& appearance = ShapeAppearance.getValues();
-        const App::Material colour = (usePerSolidColors || appearance.empty())
+        const App::Material colour = (perSolidColors() || appearance.empty())
             ? partColor(body.source, index)
             : appearance.front();
 
@@ -949,20 +949,16 @@ void ViewProviderSectionAnalysis::finishRestoring()
 {
     ViewProviderPart::finishRestoring();
 
-    // Restore persisted settings
-    hatchEnabled = ShowHatching.getValue();
-    usePerSolidColors = PerBodyColors.getValue();
-
     // After document restore the scene graph is fully built it is safe to set up
     // clip planes, plane visual and hatching(s)
     if (Visibility.getValue()) {
         installClipPlane();
     }
     updatePlaneVisual();
-    if (usePerSolidColors) {
+    if (perSolidColors()) {
         applyPerSolidColors();
     }
-    setHatching(hatchEnabled);
+    applyHatching();
 }
 
 void ViewProviderSectionAnalysis::installClipPlane()
@@ -1300,7 +1296,7 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
     hatchCoords->point.setNum(0);
 
     auto* feat = getObject<Part::SectionAnalysis>();
-    if (!hatchEnabled || !feat) {
+    if (!hatchingEnabled() || !feat) {
         return;
     }
 
@@ -1472,16 +1468,30 @@ void ViewProviderSectionAnalysis::applyPerSolidColors()
 
 void ViewProviderSectionAnalysis::setHatching(bool on)
 {
-    hatchEnabled = on;
-    if (ShowHatching.getValue() != on) {
-        ShowHatching.setValue(on);
-    }
+    ShowHatching.setValue(on);
+}
 
+void ViewProviderSectionAnalysis::applyHatching()
+{
     // The hatching hangs off pcRoot rather than the display-mode switch, so it
     // has to follow the object's visibility explicitly
     if (hatchSwitch) {
-        hatchSwitch->whichChild = (on && Visibility.getValue()) ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+        hatchSwitch->whichChild =
+            (hatchingEnabled() && Visibility.getValue()) ? SO_SWITCH_ALL : SO_SWITCH_NONE;
     }
+    updateHatchGeometry();
+}
+
+void ViewProviderSectionAnalysis::applySectionColors()
+{
+    if (perSolidColors()) {
+        applyPerSolidColors();
+        return;
+    }
+
+    // Back to one colour for the whole section. updateHatchGeometry() is a no-op
+    // when hatching is off, so it needs no guard of its own.
+    ShapeAppearance.setValues({paletteColor(0)});
     updateHatchGeometry();
 }
 
@@ -1496,18 +1506,14 @@ void ViewProviderSectionAnalysis::onChanged(const App::Property* prop)
         updateHatchGeometry();
     }
     else if (prop == &ShowHatching) {
-        // Keep the property editor and the task panel switch in sync
-        if (ShowHatching.getValue() != hatchEnabled) {
-            setHatching(ShowHatching.getValue());
-        }
+        applyHatching();
     }
     else if (prop == &PerBodyColors) {
-        // The task panel calls setPerSolidColors() directly, so this is the
-        // property editor path. Skipped while restoring: the colours are
-        // reapplied by finishRestoring() once ShapeAppearance is back, and
-        // acting here could overwrite it depending on property order.
-        if (!isRestoring() && PerBodyColors.getValue() != usePerSolidColors) {
-            setPerSolidColors(PerBodyColors.getValue());
+        // Skipped while restoring: the colours are reapplied by finishRestoring()
+        // once ShapeAppearance is back, and acting here could overwrite it
+        // depending on property order.
+        if (!isRestoring()) {
+            applySectionColors();
         }
     }
 
@@ -1537,18 +1543,7 @@ void ViewProviderSectionAnalysis::setShowPlane(bool on)
 
 void ViewProviderSectionAnalysis::setPerSolidColors(bool on)
 {
-    usePerSolidColors = on;
     PerBodyColors.setValue(on);
-    if (on) {
-        applyPerSolidColors();
-    }
-    else {
-        // Restore single section color
-        ShapeAppearance.setValues({paletteColor(0)});
-        if (hatchEnabled) {
-            setHatching(true);
-        }
-    }
 }
 
 void ViewProviderSectionAnalysis::setEditViewer(Gui::View3DInventorViewer* viewer, int ModNum)
@@ -1563,17 +1558,11 @@ void ViewProviderSectionAnalysis::unsetEditViewer(Gui::View3DInventorViewer* vie
     ViewProviderDragger::unsetEditViewer(viewer);
 }
 
-void ViewProviderSectionAnalysis::syncDraggerPlacement()
-{
-    // The handles follow the spin boxes they are bound to, and the task panel
-    // re-places them when the plane moves, so there is nothing to do here.
-}
-
 void ViewProviderSectionAnalysis::show()
 {
     installClipPlane();
     updatePlaneVisual();
-    if (usePerSolidColors) {
+    if (perSolidColors()) {
         applyPerSolidColors();
     }
     // Plane visual hidden by default - shown when editing via task panel
@@ -1590,7 +1579,7 @@ void ViewProviderSectionAnalysis::show()
 
     // After the base class, which rebuilds the tessellation the hatching is
     // sliced from when it went stale while hidden
-    setHatching(hatchEnabled);
+    applyHatching();
 }
 
 void ViewProviderSectionAnalysis::hide()
@@ -1627,9 +1616,7 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
         // Runs on every gizmo motion and so must stay cheap
         updateClipPlaneEquation();
         updatePlaneVisual();
-        // Presets and the angle spin boxes move the plane behind the dragger's
-        // back, so the gizmo has to follow
-        syncDraggerPlacement();
+
         if (prop == &feat->PlaneNormal || prop == &feat->FlipCut) {
             // The direction of the 45 deg pattern follows the plane orientation.
             // FlipCut no longer changes anything here - the lines used to be
@@ -1684,7 +1671,7 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
         }
         refreshSourceBBoxCache();
         updatePlaneVisual();
-        if (usePerSolidColors) {
+        if (perSolidColors()) {
             applyPerSolidColors();
         }
         // New tessellation, so the hatching has to be sliced again

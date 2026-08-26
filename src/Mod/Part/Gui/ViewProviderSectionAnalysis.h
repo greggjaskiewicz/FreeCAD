@@ -156,6 +156,17 @@ public:
     void setPerSolidColors(bool on);
     void setShowPlane(bool on);
 
+    /// The properties are the only state these two have; reading them back
+    /// beats a cached copy that has to be kept in step.
+    bool hatchingEnabled() const
+    {
+        return ShowHatching.getValue();
+    }
+    bool perSolidColors() const
+    {
+        return PerBodyColors.getValue();
+    }
+
     /// Centre and diagonal of the cached source bounding box. 
     /// False if there is nothing to measure. 
     /// Shared so the plane quad and the handles are placed
@@ -194,14 +205,17 @@ private:
     /// ghost expensive enough to look like the section itself was slow.
     void updateRemovedMaterialPlane();
 
-    /// Re-orient the dragger after the plane was changed from outside it
-    void syncDraggerPlacement();
-
     /// Plane in "cut frame": normal pointing away from the material that
     /// survives the cut, i.e. PlaneNormal/PlaneOffset negated when FlipCut is
     /// set. Returns false if the feature has no usable normal.
     bool getCutFrame(Base::Vector3d& normal, double& offset);
     void applyPerSolidColors();
+
+    /// Push ShowHatching / PerBodyColors into the scene graph. Separate from the
+    /// setters so showing or restoring can re-apply without writing a property,
+    /// which would mark the document modified.
+    void applyHatching();
+    void applySectionColors();
 
     /// Cache the source bbox; expensive on large assemblies, so refreshed only
     /// when the geometry can have changed not on every plane move.
@@ -272,8 +286,6 @@ private:
     void releaseHarvestCache();
 
     bool clipInstalled = false;
-    bool hatchEnabled = true;
-    bool usePerSolidColors = false;
     /// An object and the clip node living inside its own view provider, which
     /// holds the cutting plane in that object's local frame. Paired rather than
     /// two lists, so the node cannot be transformed by the wrong placement.
