@@ -216,10 +216,6 @@ private:
     /// ghost expensive enough to look like the section itself was slow.
     void updateRemovedMaterialPlane();
 
-    /// Plane in "cut frame": normal pointing away from the material that
-    /// survives the cut, i.e. PlaneNormal/PlaneOffset negated when FlipCut is
-    /// set. Returns false if the feature has no usable normal.
-    bool getCutFrame(Base::Vector3d& normal, double& offset);
     void applyPerSolidColors();
 
     /// Push ShowHatching / PerBodyColors into the scene graph. Separate from the

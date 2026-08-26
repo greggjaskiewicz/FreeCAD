@@ -525,8 +525,6 @@ void ViewProviderSectionAnalysis::refreshHarvestCache()
     harvestValid = true;
 }
 
-
-
 void ViewProviderSectionAnalysis::updateRemovedMaterialPlane()
 {
     if (!removedMaterialClip) {

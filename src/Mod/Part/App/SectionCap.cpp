@@ -41,8 +41,10 @@ namespace
 
 /// When slicing, segments are scattered without a clear order. 
 /// ChainLoops must repeatedly determine the end of each unused segment.
-/// Each scan is inefficient, like a quadratic search. To simplify, we store endpoints by position. 
-/// A point is rounded to a cell tolerance wide. Instead of checking every cell, we look for nearby ones. 
+/// Each scan is inefficient, like a quadratic search. 
+/// To simplify, we store endpoints by position. 
+/// A point is rounded to a cell tolerance wide. ...
+/// Instead of checking every cell, we look for nearby ones. 
 /// The cell narrows down possibilities, but the exact distance test determines a match.
 
 struct EndpointCell
@@ -418,12 +420,6 @@ bool SectionCap::isClosed(const std::vector<Base::Vector3d>& loop, double tolera
     }
     return Base::DistanceP2(loop.front(), loop.back()) <= tolerance * tolerance;
 }
-
-// Fill the loops with a series of horizontal strips, each strip is filled with a series of quads, which are then triangulated.
-
-
-
-
 
 std::vector<SectionCap::Segment> SectionCap::hatchTriangles(
     const TriangleSoup& cap,
