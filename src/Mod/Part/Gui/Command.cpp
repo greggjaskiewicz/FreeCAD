@@ -2556,7 +2556,7 @@ void CmdPartSectionAnalysis::activated(int iMsg)
     // Set the plane normal to the snapped axis
     doCommand(
         Doc,
-        "App.getDocument('%s').ActiveObject.PlaneNormal = FreeCAD.Vector(%f, %f, %f)",
+        "App.getDocument('%s').ActiveObject.PlaneNormal = FreeCAD.Vector(%.12g, %.12g, %.12g)",
         docName.c_str(),
         nx,
         ny,

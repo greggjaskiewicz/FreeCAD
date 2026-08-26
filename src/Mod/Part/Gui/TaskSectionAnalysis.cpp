@@ -915,9 +915,13 @@ bool SectionAnalysisWidget::accept()
 {
     try {
         Base::Vector3d n = feature->PlaneNormal.getValue();
-        Gui::cmdAppObjectArgs(feature, "PlaneNormal = FreeCAD.Vector(%f, %f, %f)", n.x, n.y, n.z);
-        Gui::cmdAppObjectArgs(feature, "PlaneOffset = %f", feature->PlaneOffset.getValue());
-        Gui::cmdAppObjectArgs(feature, "FlipCut = %s", flipCheck->isChecked() ? "True" : "False");
+        // %.12g rather than %f: these are doubles, and a recorded macro should
+        // reproduce the plane the user actually left rather than a rounding of it.
+        Gui::cmdAppObjectArgs(
+            feature, "PlaneNormal = FreeCAD.Vector(%.12g, %.12g, %.12g)", n.x, n.y, n.z);
+        Gui::cmdAppObjectArgs(feature, "PlaneOffset = %.12g", feature->PlaneOffset.getValue());
+        Gui::cmdAppObjectArgs(
+            feature, "FlipCut = %s", feature->FlipCut.getValue() ? "True" : "False");
 
         Gui::Command::doCommand(Gui::Command::Doc, "App.ActiveDocument.recompute()");
         if (!feature->isValid()) {
