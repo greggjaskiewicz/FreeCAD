@@ -2470,6 +2470,17 @@ CmdPartSectionAnalysis::CmdPartSectionAnalysis()
     sPixmap = "Part_SectionAnalysis";
 }
 
+namespace
+{
+/// A section of a section means nothing, and leaving one selected in the tree
+/// is an easy way to feed it in as a source.
+bool canBeSectioned(const App::DocumentObject* obj)
+{
+    return obj && !obj->isDerivedFrom(Part::SectionAnalysis::getClassTypeId())
+        && Part::SectionAnalysis::isEffectivelyVisible(obj);
+}
+}  // namespace
+
 void CmdPartSectionAnalysis::activated(int iMsg)
 {
     Q_UNUSED(iMsg);
@@ -2480,7 +2491,7 @@ void CmdPartSectionAnalysis::activated(int iMsg)
     auto sel = Gui::Selection().getSelectionEx();
     for (auto& selObj : sel) {
         auto* obj = selObj.getObject();
-        if (obj && Part::SectionAnalysis::isEffectivelyVisible(obj)) {
+        if (canBeSectioned(obj)) {
             sources.push_back(obj);
         }
     }
@@ -2494,7 +2505,7 @@ void CmdPartSectionAnalysis::activated(int iMsg)
                 if (App::GeoFeatureGroupExtension::getGroupOfObject(obj)) {
                     continue;
                 }
-                if (Part::SectionAnalysis::isEffectivelyVisible(obj)) {
+                if (canBeSectioned(obj)) {
                     sources.push_back(obj);
                 }
             }
