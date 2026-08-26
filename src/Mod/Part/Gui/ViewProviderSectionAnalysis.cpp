@@ -1411,14 +1411,14 @@ void ViewProviderSectionAnalysis::updateHatchGeometry()
 
 void ViewProviderSectionAnalysis::applyPerSolidColors()
 {
-    auto* feat = getObject<Part::SectionAnalysis>();
+  auto* feat = getObject<Part::SectionAnalysis>();
     if (!feat) {
         return;
     }
 
     // Authoritative face-to-source mapping computed in execute():
-    //   faceIdx[i] = index into `parts` of the object that produced face i.
-    // An object contributing several solids appears once in `parts`, so all of
+    // Each faceIdx[i] = index into parts of the object that produced face i.
+    // An object contributing several solids appears once in parts, so all of
     // its faces get the same colour.
     const auto& faceIdx = feat->FaceSourceIndex.getValues();
     const auto& parts = feat->SourceParts.getValues();
@@ -1426,9 +1426,7 @@ void ViewProviderSectionAnalysis::applyPerSolidColors()
         return;
     }
 
-    // With a single source body there is nothing to tell apart, and taking that
-    // body's colour would only replace the section's own - most visibly when the
-    // body still has the default grey, which reads as the colour disappearing.
+    // For single part - nothing to do here. Bail early.
     if (parts.size() < 2) {
         return;
     }
@@ -1436,7 +1434,7 @@ void ViewProviderSectionAnalysis::applyPerSolidColors()
     std::vector<App::Material> partMats;
     partMats.reserve(parts.size());
     for (size_t i = 0; i < parts.size(); i++) {
-        App::Material mat = paletteColor(i);
+        App::Material mat = distinctColor(i);
         if (parts[i]) {
             auto* vp = Gui::Application::Instance->getViewProvider(parts[i]);
             if (auto* vpPart = dynamic_cast<ViewProviderPartExt*>(vp)) {
@@ -1455,7 +1453,7 @@ void ViewProviderSectionAnalysis::applyPerSolidColors()
     for (size_t i = 0; i < faceIdx.size(); i++) {
         const long pi = faceIdx[i];
         materials.push_back(
-            (pi >= 0 && pi < static_cast<long>(partMats.size())) ? partMats[pi] : paletteColor(i)
+            (pi >= 0 && pi < static_cast<long>(partMats.size())) ? partMats[pi] : distinctColor(i)
         );
     }
 

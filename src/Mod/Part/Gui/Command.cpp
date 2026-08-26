@@ -2591,6 +2591,13 @@ void CmdPartSectionAnalysis::activated(int iMsg)
                 vp->ShapeAppearance.setValues(
                     {PartGui::ViewProviderSectionAnalysis::paletteColor(count - 1)}
                 );
+
+                // If the sources come from multiple parts, enable per-solid colors
+                const bool severalParts =
+                    Part::SectionAnalysis::distinctSourceParts(sources, saObj).size() > 1;
+                if (severalParts) {
+                    vp->setPerSolidColors(true);
+                }
             }
         }
     }
