@@ -301,51 +301,77 @@ SectionCap::TriangleSoup SectionCap::fillLoops(
     // The cap is bounded so a stray tiny height cannot ask for millions.
     const int steps = std::clamp(
         static_cast<int>(std::ceil((bMax - bMin) / stripHeight)),
-        1,
+        minFillStrips,
         maxFillStrips
     );
 
     const double height = (bMax - bMin) / static_cast<double>(steps);
-    std::vector<double> crossings;
 
-    // Fill the cut region with a series of horizontal strips 
-    // Each strip is filled with a series of quads, which are then triangulated.    
+    /// Where the region's edges cross one level, left to right.
+    auto crossingsAt = [&edges](double level, std::vector<double>& out) {
+        out.clear();
+        for (const auto& e : edges) {
+            // Half open, so a vertex exactly on the level is counted once and
+            // the parity below is not flipped back by it.
+            if ((e.b0 > level) == (e.b1 > level)) {
+                continue;
+            }
+            const double t = (level - e.b0) / (e.b1 - e.b0);
+            out.push_back(e.a0 + (e.a1 - e.a0) * t);
+        }
+        std::sort(out.begin(), out.end());
+    };
+
+    std::vector<double> atLower;
+    std::vector<double> atUpper;
+    std::vector<double> atMiddle;
+
+    auto addQuad = [&soup, &u, &v, &offsetFromOrigin](double leftLower,
+                                                      double rightLower,
+                                                      double leftUpper,
+                                                      double rightUpper,
+                                                      double lower,
+                                                      double upper) {
+        const int base = static_cast<int>(soup.points.size());
+        soup.points.push_back(offsetFromOrigin + u * leftLower + v * lower);
+        soup.points.push_back(offsetFromOrigin + u * rightLower + v * lower);
+        soup.points.push_back(offsetFromOrigin + u * rightUpper + v * upper);
+        soup.points.push_back(offsetFromOrigin + u * leftUpper + v * upper);
+        soup.indices.insert(soup.indices.end(),
+                            {base, base + 1, base + 2, base, base + 2, base + 3});
+    };
+
+    crossingsAt(bMin, atLower);
+
     for (int k = 0; k < steps; ++k) {
         const double lower = bMin + height * k;
         const double upper = lower + height;
-        // Sampled mid strip, so a strip is filled according to what the region
-        // does across it rather than exactly on its boundary.
-        const double middle = lower + height * 0.5;
+        crossingsAt(upper, atUpper);
 
-        crossings.clear();
-        for (const auto& e : edges) {
-            if ((e.b0 > middle) == (e.b1 > middle)) {
-                continue;
+        // Trapezoids, so a straight boundary is followed exactly rather than as
+        // a staircase of the strip height. Only possible when both edges of the
+        // strip cross the region the same number of times.
+        if (atLower.size() == atUpper.size() && atLower.size() >= 2) {
+            for (std::size_t i = 0; i + 1 < atLower.size(); i += 2) {
+                if (atLower[i + 1] > atLower[i] || atUpper[i + 1] > atUpper[i]) {
+                    addQuad(atLower[i], atLower[i + 1], atUpper[i], atUpper[i + 1], lower, upper);
+                }
             }
-            const double t = (middle - e.b0) / (e.b1 - e.b0);
-            crossings.push_back(e.a0 + (e.a1 - e.a0) * t);
         }
-        if (crossings.size() < 2) {
-            continue;
+        else {
+            // A vertex or a hole starts inside this strip, so the two edges do
+            // not pair up. Sampled mid strip instead, which is the old
+            // behaviour and steps by at most one strip height.
+            const double middle = lower + height * 0.5;
+            crossingsAt(middle, atMiddle);
+            for (std::size_t i = 0; i + 1 < atMiddle.size(); i += 2) {
+                if (atMiddle[i + 1] > atMiddle[i]) {
+                    addQuad(atMiddle[i], atMiddle[i + 1], atMiddle[i], atMiddle[i + 1], lower, upper);
+                }
+            }
         }
-        std::sort(crossings.begin(), crossings.end());
 
-        for (std::size_t i = 0; i + 1 < crossings.size(); i += 2) {
-            const double left = crossings[i];
-            const double right = crossings[i + 1];
-            if (!(right > left)) {
-                continue;
-            }
-            const int base = static_cast<int>(soup.points.size());
-            soup.points.push_back(offsetFromOrigin + u * left + v * lower);
-            soup.points.push_back(offsetFromOrigin + u * right + v * lower);
-            soup.points.push_back(offsetFromOrigin + u * right + v * upper);
-            soup.points.push_back(offsetFromOrigin + u * left + v * upper);
-            soup.indices.insert(
-                soup.indices.end(),
-                {base, base + 1, base + 2, base, base + 2, base + 3}
-            );
-        }
+        atLower.swap(atUpper);
     }
 
     return soup;

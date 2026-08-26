@@ -124,6 +124,12 @@ PartExport TriangleSoup fillLoops(
 /// millions of strips and hang the view.
 inline constexpr int maxFillStrips = 2000;
 
+/// Fewest strips `fillLoops` will use for one region however coarse the height.
+///
+/// Strips are trapezoids, so a straight boundary is exact at any count; this
+/// only bounds the stepping where a vertex or hole starts inside a strip.
+inline constexpr int minFillStrips = 16;
+
 /// The box's extent projected onto `normal`, so a plane that misses a body can
 /// be rejected without visiting a triangle. False when the box is void.
 ///
