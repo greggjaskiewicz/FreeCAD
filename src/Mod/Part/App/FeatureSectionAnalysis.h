@@ -93,15 +93,15 @@ public:
     static Base::Vector3d
     draggerAnchor(const Base::Vector3d& normal, double offset, const Base::Vector3d& hint);
 
-    /// Does a change to this section's own property named `propertyName` mean
-    /// the triangles harvested from the 3D view are stale?
+    /// Does a change to this section's own `prop` mean the triangles harvested
+    /// from the 3D view are stale?
     ///
     /// Only the input list can. Moving the plane changes nothing about the
     /// geometry being cut, and the section's own outputs - Shape, SourceParts,
     /// FaceSourceIndex - are republished by every recompute. Keying the cache
     /// off an output throws it away on every plane move, which has now happened
     /// twice: once via Shape, once via SourceParts.
-    static bool ownPropertyInvalidatesHarvest(const char* propertyName);
+    bool invalidatesHarvest(const App::Property& prop) const;
 
     /// Does `prop` having just changed on `obj` mean the triangles harvested
     /// from the 3D view are stale?

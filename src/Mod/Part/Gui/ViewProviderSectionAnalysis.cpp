@@ -766,27 +766,27 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
     // updateData(), which already asks for both.
     refreshHarvestCache();
 
-    std::size_t index = 0;
-    for (const HarvestedBody& body : harvestCache) {
+    // Indexed rather than range-for: index picks the colour and the hatch angle,
+    // and has to advance even for bodies the plane misses, so a part keeps its
+    // colour whether or not it is currently being cut.
+    for (std::size_t index = 0; index < harvestCache.size(); ++index) {
+        const HarvestedBody& body = harvestCache[index];
         // Reject on the bounding box first. On an assembly this is the
         // difference between visiting every triangle and visiting almost none,
         // which only holds because the box was measured at harvest time.
         double lo = 0.0;
         double hi = 0.0;
         if (!Part::SectionCap::extentAlong(body.bounds, n, lo, hi) || d < lo || d > hi) {
-            ++index;
             continue;
         }
 
         const auto segments = Part::SectionCap::sliceTriangles(body.soup, n, d);
         if (segments.empty()) {
-            ++index;
             continue;
         }
 
         const auto loops = Part::SectionCap::chainLoops(segments, chainTolerance);
         if (loops.empty()) {
-            ++index;
             continue;
         }
 
@@ -912,7 +912,6 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
         }
 
         if (points.empty()) {
-            ++index;
             continue;
         }
 
@@ -942,7 +941,6 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
         node->addChild(lines);
 
         capRoot->addChild(node);
-        ++index;
     }
 }
 
@@ -954,6 +952,12 @@ void ViewProviderSectionAnalysis::finishRestoring()
     // clip planes, plane visual and hatching(s)
     if (Visibility.getValue()) {
         installClipPlane();
+
+        // attach() already tried this, but it runs before the source view
+        // providers have their scene graphs, so it harvested an empty walk.
+        // This is the first moment there is anything to slice.
+        updateCapFromScene();
+        updateRemovedMaterial();
     }
     updatePlaneVisual();
     if (perSolidColors()) {
@@ -1677,8 +1681,7 @@ void ViewProviderSectionAnalysis::updateData(const App::Property* prop)
 
     // The clipped set follows SourceParts, which execute() rebuilds
     if (prop == &feat->Source || prop == &feat->SourceParts) {
-        const bool harvestStale =
-            Part::SectionAnalysis::ownPropertyInvalidatesHarvest(feat->getPropertyName(prop));
+        const bool harvestStale = feat->invalidatesHarvest(*prop);
         if (harvestStale) {
             harvestValid = false;
         }

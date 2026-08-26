@@ -171,9 +171,11 @@ void SectionAnalysis::handleChangedPropertyName(
     Part::Feature::handleChangedPropertyName(reader, TypeName, PropName);
 }
 
-bool SectionAnalysis::ownPropertyInvalidatesHarvest(const char* propertyName)
+bool SectionAnalysis::invalidatesHarvest(const App::Property& prop) const
 {
-    return propertyName != nullptr && std::strcmp(propertyName, "Source") == 0;
+    // By address, so renaming Source is a compile error rather than a rule that
+    // quietly stops matching.
+    return &prop == &Source;
 }
 
 // The properties of the source objects that can change the triangles harvested

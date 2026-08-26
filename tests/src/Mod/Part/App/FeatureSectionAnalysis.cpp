@@ -948,10 +948,10 @@ TEST_F(FeatureSectionAnalysisTest, testMovingThePlaneDoesNotInvalidateTheHarvest
 {
     // The whole point of the cache: the geometry being cut has not changed, so
     // dragging the plane must never trigger another scene walk.
-    EXPECT_FALSE(Part::SectionAnalysis::ownPropertyInvalidatesHarvest("PlaneNormal"));
-    EXPECT_FALSE(Part::SectionAnalysis::ownPropertyInvalidatesHarvest("PlaneOffset"));
-    EXPECT_FALSE(Part::SectionAnalysis::ownPropertyInvalidatesHarvest("FlipCut"));
-    EXPECT_FALSE(Part::SectionAnalysis::ownPropertyInvalidatesHarvest("ResultMode"));
+    EXPECT_FALSE(_section->invalidatesHarvest(_section->PlaneNormal));
+    EXPECT_FALSE(_section->invalidatesHarvest(_section->PlaneOffset));
+    EXPECT_FALSE(_section->invalidatesHarvest(_section->FlipCut));
+    EXPECT_FALSE(_section->invalidatesHarvest(_section->ResultMode));
 }
 
 TEST_F(FeatureSectionAnalysisTest, testTheSectionsOwnOutputDoesNotInvalidateTheHarvest)
@@ -959,16 +959,16 @@ TEST_F(FeatureSectionAnalysisTest, testTheSectionsOwnOutputDoesNotInvalidateTheH
     // Both of these were real regressions. execute() republishes its outputs on
     // every recompute - even unchanged - so a cache keyed off one of them is
     // discarded every time the plane moves.
-    EXPECT_FALSE(Part::SectionAnalysis::ownPropertyInvalidatesHarvest("Shape"));
-    EXPECT_FALSE(Part::SectionAnalysis::ownPropertyInvalidatesHarvest("SourceParts"));
-    EXPECT_FALSE(Part::SectionAnalysis::ownPropertyInvalidatesHarvest("FaceSourceIndex"));
+    EXPECT_FALSE(_section->invalidatesHarvest(_section->Shape));
+    EXPECT_FALSE(_section->invalidatesHarvest(_section->SourceParts));
+    EXPECT_FALSE(_section->invalidatesHarvest(_section->FaceSourceIndex));
 }
 
 TEST_F(FeatureSectionAnalysisTest, testChangingWhatIsSectionedInvalidatesTheHarvest)
 {
     // Source is the input list, and the only own property that can change which
     // triangles exist.
-    EXPECT_TRUE(Part::SectionAnalysis::ownPropertyInvalidatesHarvest("Source"));
+    EXPECT_TRUE(_section->invalidatesHarvest(_section->Source));
 }
 
 TEST_F(FeatureSectionAnalysisTest, testEditingOrHidingASourceInvalidatesTheHarvest)
@@ -1199,6 +1199,8 @@ TEST_F(FeatureSectionAnalysisTest, testAnUnnamedPropertyIsNotTreatedAsGeometry)
     // Shape while naming another box as the object is the shape that mistake
     // takes in practice.
     EXPECT_FALSE(Part::SectionAnalysis::isHarvestStaleAfter(*_boxes[0], _boxes[1]->Shape));
-    EXPECT_FALSE(Part::SectionAnalysis::ownPropertyInvalidatesHarvest(nullptr));
+
+    // Another object's property is not this section's Source, however it is named.
+    EXPECT_FALSE(_section->invalidatesHarvest(_boxes[1]->Shape));
 }
 // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
