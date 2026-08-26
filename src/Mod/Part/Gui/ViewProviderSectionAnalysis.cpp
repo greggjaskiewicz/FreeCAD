@@ -1009,39 +1009,36 @@ void ViewProviderSectionAnalysis::installClipPlane()
         auto* node = new SoClipPlane;
         node->ref();
         root->insertChild(node, switchIdx >= 0 ? switchIdx : 1);
-        clippedObjects.push_back(obj);
-        clipNodes.push_back(node);
+        clippedObjects.push_back(ClippedObject {obj, node});
     }
-    clipInstalled = !clipNodes.empty();
+    clipInstalled = !clippedObjects.empty();
     updateClipPlaneEquation();
 }
 
 void ViewProviderSectionAnalysis::removeClipPlane()
 {
-    for (size_t i = 0; i < clippedObjects.size(); ++i) {
-        SoClipPlane* node = (i < clipNodes.size()) ? clipNodes[i] : nullptr;
-        if (!node) {
+    for (const ClippedObject& clipped : clippedObjects) {
+        if (!clipped.node) {
             continue;
         }
-        if (auto* vp = Gui::Application::Instance->getViewProvider(clippedObjects[i])) {
+        if (auto* vp = Gui::Application::Instance->getViewProvider(clipped.object)) {
             if (auto* root = dynamic_cast<SoSeparator*>(vp->getRoot())) {
-                int idx = root->findChild(node);
+                int idx = root->findChild(clipped.node);
                 if (idx >= 0) {
                     root->removeChild(idx);
                 }
             }
         }
-        node->unref();
+        clipped.node->unref();
     }
     clippedObjects.clear();
-    clipNodes.clear();
     clipInstalled = false;
 }
 
 void ViewProviderSectionAnalysis::updateClipPlaneEquation()
 {
     auto* feat = getObject<Part::SectionAnalysis>();
-    if (!feat || clipNodes.empty()) {
+    if (!feat || clippedObjects.empty()) {
         return;
     }
 
@@ -1056,12 +1053,14 @@ void ViewProviderSectionAnalysis::updateClipPlaneEquation()
     // SoClipPlane keeps the positive normal half space, so we negate the
     // normal to keep the same side as OCCT.
     //
-    // Offset the clip plane by a tiny epsilon toward the remaining solid
-    // so it clips slightly past the section face. This prevents Z fighting
-    // between the source body's surface at the clip boundary and the
-    // section face (which lies exactly on the cutting plane).
-    constexpr double clipEps = 0.01;  // 10 microns
+    // Nudge past the cut plane face, so the body's surface does not z-fight the cap.
+    // Which would cause visual flicker.
+    // Not an OCCT tolerance: those are for doubles, and Coin holds vertices as float.
+    // Precision::Confusion here would round away to nothing.
+    constexpr double clipEps = 0.01;
+
     const double dClip = d - clipEps;
+
     const Base::Vector3d gNormal(-n.x, -n.y, -n.z);                      // global half-space normal
     const Base::Vector3d gPoint(n.x * dClip, n.y * dClip, n.z * dClip);  // global point on plane
 
@@ -1069,12 +1068,11 @@ void ViewProviderSectionAnalysis::updateClipPlaneEquation()
     // expressed in that object's local frame: transform the global plane by the
     // inverse of the object's global placement. Objects with identity placement
     // get the global plane unchanged.
-    for (size_t i = 0; i < clipNodes.size(); ++i) {
-        SoClipPlane* node = clipNodes[i];
-        if (!node) {
+    for (const ClippedObject& clipped : clippedObjects) {
+        if (!clipped.node) {
             continue;
         }
-        App::DocumentObject* obj = (i < clippedObjects.size()) ? clippedObjects[i] : nullptr;
+        App::DocumentObject* obj = clipped.object;
 
         Base::Vector3d localNormal = gNormal;
         Base::Vector3d localPoint = gPoint;
@@ -1084,7 +1082,7 @@ void ViewProviderSectionAnalysis::updateClipPlaneEquation()
             inv.multVec(gPoint, localPoint);                  // full transform for the point
         }
 
-        node->plane.setValue(SbPlane(
+        clipped.node->plane.setValue(SbPlane(
             SbVec3f(
                 static_cast<float>(localNormal.x),
                 static_cast<float>(localNormal.y),
@@ -1096,7 +1094,7 @@ void ViewProviderSectionAnalysis::updateClipPlaneEquation()
                 static_cast<float>(localPoint.z)
             )
         ));
-        node->on.setValue(TRUE);
+        clipped.node->on.setValue(TRUE);
     }
 }
 

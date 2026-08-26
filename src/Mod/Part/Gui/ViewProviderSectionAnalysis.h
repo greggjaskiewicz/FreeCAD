@@ -268,10 +268,15 @@ private:
     bool clipInstalled = false;
     bool hatchEnabled = true;
     bool usePerSolidColors = false;
-    std::vector<App::DocumentObject*> clippedObjects;
-    // One clip plane per clipped object (parallel to clippedObjects), holding
-    // the cutting plane in that object's local frame.
-    std::vector<SoClipPlane*> clipNodes;
+    /// An object and the clip node living inside its own view provider, which
+    /// holds the cutting plane in that object's local frame. Paired rather than
+    /// two lists, so the node cannot be transformed by the wrong placement.
+    struct ClippedObject
+    {
+        App::DocumentObject* object = nullptr;
+        SoClipPlane* node = nullptr;
+    };
+    std::vector<ClippedObject> clippedObjects;
 
     // Cached source bbox (xmin,ymin,zmin,xmax,ymax,zmax) for sizing the plane
     // quad without recomputing the source shape on every move.
