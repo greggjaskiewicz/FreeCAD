@@ -64,12 +64,12 @@ class SectionAnalysis;
 namespace PartGui
 {
 
-/// SoLevelOfDetail reads the complexity elements unconditionally in doAction().
-/// FreeCAD's own actions (selection, highlight, ...) enable only the handful of
-/// elements they need and bind callDoAction to SoGroup, so a stock node asserts
-/// in SoState::getConstElement as soon as the selection changes. This subclass
-/// serves those actions the full-detail child instead; rendering is untouched,
-/// because SoLevelOfDetail::GLRender calls its own doAction explicitly.
+/// SoLevelOfDetail picks a level from the camera and viewport in doAction(),
+/// but FreeCAD's own actions (selection, highlight, ...) enable only the handful
+/// of elements they need, so a stock node reads an element that is not there and
+/// asserts. This subclass serves every non-render traversal the full-detail child
+/// instead; rendering is untouched, because SoLevelOfDetail::GLRender calls its
+/// own doAction explicitly.
 class SoHatchLevelOfDetail: public SoLevelOfDetail
 {
     SO_NODE_HEADER(SoHatchLevelOfDetail);

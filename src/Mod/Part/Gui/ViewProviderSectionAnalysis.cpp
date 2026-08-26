@@ -42,10 +42,7 @@
 #include <Inventor/nodes/SoDrawStyle.h>
 #include <Inventor/nodes/SoFaceSet.h>
 #include <Inventor/actions/SoGLRenderAction.h>
-#include <Inventor/elements/SoComplexityElement.h>
-#include <Inventor/elements/SoComplexityTypeElement.h>
 #include <Inventor/misc/SoChildList.h>
-#include <Inventor/misc/SoState.h>
 #include <Inventor/nodes/SoIndexedFaceSet.h>
 #include <Inventor/nodes/SoIndexedLineSet.h>
 #include <Inventor/nodes/SoMaterial.h>
@@ -241,12 +238,9 @@ void SoHatchLevelOfDetail::doAction(SoAction* action)
             break;
     }
 
-    // Picking the level needs the complexity elements. An action that never
-    // enabled them is not rendering, so give it the full-detail child rather
-    // than asking the state for something that is not there.
-    SoState* state = action->getState();
-    if (!state->isElementEnabled(SoComplexityElement::getClassStackIndex())
-        || !state->isElementEnabled(SoComplexityTypeElement::getClassStackIndex())) {
+    // Choosing a level needs a camera and a viewport, so only a render traversal
+    // can do it. Everything else gets the full-detail child.
+    if (!action->isOfType(SoGLRenderAction::getClassTypeId())) {
         if (getNumChildren() > 0) {
             getChildren()->traverse(action, 0);
         }
