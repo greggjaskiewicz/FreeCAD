@@ -796,33 +796,24 @@ void SectionAnalysisWidget::onFlipToggled(bool on)
 void SectionAnalysisWidget::onSectionColorChanged(const QColor& color)
 {
     // Update the section face color on the ViewProvider
-    auto* vp = dynamic_cast<PartGui::ViewProviderSectionAnalysis*>(
-        Gui::Application::Instance->getViewProvider(feature)
-    );
-    if (vp) {
+    if (viewProvider) {
         App::Material mat;
         mat.diffuseColor.set(color.redF(), color.greenF(), color.blueF(), 0.0f);
-        vp->ShapeAppearance.setValues({mat});
+        viewProvider->ShapeAppearance.setValues({mat});
     }
 }
 
 void SectionAnalysisWidget::onHatchToggled(bool on)
 {
-    auto* vp = dynamic_cast<PartGui::ViewProviderSectionAnalysis*>(
-        Gui::Application::Instance->getViewProvider(feature)
-    );
-    if (vp) {
-        vp->setHatching(on);
+    if (viewProvider) {
+        viewProvider->setHatching(on);
     }
 }
 
 void SectionAnalysisWidget::onPerSolidColorToggled(bool on)
 {
-    auto* vp = dynamic_cast<PartGui::ViewProviderSectionAnalysis*>(
-        Gui::Application::Instance->getViewProvider(feature)
-    );
-    if (vp) {
-        vp->setPerSolidColors(on);
+    if (viewProvider) {
+        viewProvider->setPerSolidColors(on);
     }
     // The single colour would be applied to every face, undoing the per-body one
     sectionColorBtn->setEnabled(!on);
@@ -830,11 +821,8 @@ void SectionAnalysisWidget::onPerSolidColorToggled(bool on)
 
 void SectionAnalysisWidget::onShowPlaneToggled(bool on)
 {
-    auto* vp = dynamic_cast<PartGui::ViewProviderSectionAnalysis*>(
-        Gui::Application::Instance->getViewProvider(feature)
-    );
-    if (vp) {
-        vp->setShowPlane(on);
+    if (viewProvider) {
+        viewProvider->setShowPlane(on);
     }
 }
 
@@ -934,11 +922,8 @@ bool SectionAnalysisWidget::accept()
     }
     catch (const Base::Exception& e) {
         // On error, abort and remove the object
-        auto* vp = dynamic_cast<PartGui::ViewProviderSectionAnalysis*>(
-            Gui::Application::Instance->getViewProvider(feature)
-        );
-        if (vp) {
-            vp->hide();
+        if (viewProvider) {
+            viewProvider->hide();
         }
         feature->getDocument()->abortTransaction();
         QMessageBox::warning(
@@ -955,11 +940,8 @@ bool SectionAnalysisWidget::accept()
 bool SectionAnalysisWidget::reject()
 {
     // Remove clipping before undo so the source VP is restored
-    auto* vp = dynamic_cast<PartGui::ViewProviderSectionAnalysis*>(
-        Gui::Application::Instance->getViewProvider(feature)
-    );
-    if (vp) {
-        vp->hide();
+    if (viewProvider) {
+        viewProvider->hide();
     }
 
     // Roll back the transaction (removes the SectionAnalysis object if newly created)
