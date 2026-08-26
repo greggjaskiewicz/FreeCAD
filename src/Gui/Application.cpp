@@ -2606,7 +2606,6 @@ void Application::runApplication()
         defaultFormat.setRenderableType(QSurfaceFormat::OpenGL);
         defaultFormat.setProfile(QSurfaceFormat::CompatibilityProfile);
         defaultFormat.setOption(QSurfaceFormat::DeprecatedFunctions, true);
-
 #if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
         // QGuiApplication::platformName() doesn't yet work at this point, so we use the env var
         if (getenv("WAYLAND_DISPLAY")) {
@@ -2621,6 +2620,7 @@ void Application::runApplication()
             defaultFormat.setAlphaBufferSize(8);
             // And a depth/stencil buffer is generally useful if we can have it.
             defaultFormat.setDepthBufferSize(24);
+            defaultFormat.setStencilBufferSize(8);
         }
 #endif
         QSurfaceFormat::setDefaultFormat(defaultFormat);
