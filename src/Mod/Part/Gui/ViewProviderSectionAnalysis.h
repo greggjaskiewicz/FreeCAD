@@ -178,6 +178,17 @@ protected:
     void unsetEdit(int ModNum) override;
     void onChanged(const App::Property* prop) override;
 
+    /// Include the scene-graph cap, which hangs off pcRoot rather than the
+    /// display-mode switch and so is invisible to the base class. Without it a
+    /// Display-mode section has no bounding box and View Fit cannot frame it.
+    Base::BoundBox3d _getBoundingBox(
+        const char* subname,
+        const Base::Matrix4D* mat,
+        bool transform,
+        const Gui::View3DInventorViewer* view,
+        int depth
+    ) const override;
+
 private:
     void installClipPlane();
     void removeClipPlane();

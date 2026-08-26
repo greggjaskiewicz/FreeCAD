@@ -132,6 +132,11 @@ private:
 
     Part::SectionAnalysis* feature;
     ViewProviderSectionAnalysis* viewProvider;
+
+    /// Orientation the tilt angles are measured from, for the presets that have
+    /// no fixed axis. 
+    Base::Vector3d angleBaseNormal {0.0, 0.0, 1.0};
+
     QComboBox* presetCombo = nullptr;
     QLabel* angleLabel1 = nullptr;
     QLabel* angleLabel2 = nullptr;

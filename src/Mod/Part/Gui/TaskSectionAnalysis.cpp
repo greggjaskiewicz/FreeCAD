@@ -144,6 +144,9 @@ void SectionAnalysisWidget::setupUi()
     presetCombo->addItem(tr("XZ Plane (Y normal)"));
     presetCombo->addItem(tr("YZ Plane (X normal)"));
     presetCombo->addItem(tr("View Direction"));
+    // Shown when the plane matches no preset, so the box reads as "none of
+    // these" rather than as an empty control that failed to populate.
+    presetCombo->setPlaceholderText(tr("(no preset)"));
     planeLayout->addWidget(presetCombo, 0, 1);
 
     // Detect current preset from normal
@@ -163,6 +166,10 @@ void SectionAnalysisWidget::setupUi()
         // taking the current normal as their base.
         presetCombo->setCurrentIndex(-1);
     }
+
+    // Tilting starts from wherever the plane points as the panel opens.
+    const double openLen = n.Length();
+    angleBaseNormal = (openLen > minUnitMagnitude) ? n / openLen : Base::Vector3d::UnitZ;
 
     // Angle adjustments (tilt the plane from the preset orientation)
     angleLabel1 = new QLabel(tr("X Angle:"), this);
@@ -610,6 +617,7 @@ void SectionAnalysisWidget::onPresetChanged(int index)
     feature->FlipCut.setValue(needFlip);
 
     feature->PlaneNormal.setValue(normal);
+    angleBaseNormal = normal;
 
     // Center the offset on the combined bounding box of every source, from the
     // same box the plane quad and the handles use.
@@ -664,11 +672,11 @@ void SectionAnalysisWidget::angleReferenceFrame(
         case Preset::YZ:
             baseNormal = Base::Vector3d((curN.x < 0) ? -1.0 : 1.0, 0, 0);
             break;
-        default: {
-            const double len = curN.Length();
-            baseNormal = (len > minUnitMagnitude) ? curN / len : Base::Vector3d::UnitZ;
+        default:
+            // View direction, or no preset: the base is the captured orientation,
+            // not the live normal, which applyAngles() has already rotated.
+            baseNormal = angleBaseNormal;
             break;
-        }
     }
     // Base::Console().message("angleReferenceFrame: currentIndex:%d curN=(%g,%g,%g) base=(%g,%g,%g)\n",
     //             presetCombo->currentIndex(),

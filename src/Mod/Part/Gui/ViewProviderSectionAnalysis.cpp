@@ -66,6 +66,7 @@
 #include <App/Application.h>
 #include <App/Document.h>
 #include <App/GeoFeature.h>
+#include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <App/GeoFeatureGroupExtension.h>
 #include <App/Material.h>
 #include <Base/Console.h>
@@ -1183,6 +1184,46 @@ bool ViewProviderSectionAnalysis::sourceBounds(Base::Vector3d& centre, double& d
     centre = sourceBBox.GetCenter();
     diagonal = sourceBBox.CalcDiagonalLength();
     return true;
+}
+
+Base::BoundBox3d ViewProviderSectionAnalysis::_getBoundingBox(
+    const char* subname,
+    const Base::Matrix4D* mat,
+    bool transform,
+    const Gui::View3DInventorViewer* view,
+    int depth
+) const
+{
+    Base::BoundBox3d box = ViewProviderPart::_getBoundingBox(subname, mat, transform, view, depth);
+
+    // In Display mode the Shape is empty and the cap is harvested triangles, so
+    // the base class walk of the mode switch finds nothing to measure.
+    if (!capRoot) {
+        return box;
+    }
+
+    // capRoot holds plain coordinate geometry, so the viewport plays no part.
+    SoGetBoundingBoxAction action((SbViewportRegion()));
+    action.apply(capRoot);
+    const SbBox3f capBox = action.getBoundingBox();
+    if (capBox.isEmpty()) {
+        return box;
+    }
+
+    const SbVec3f low = capBox.getMin();
+    const SbVec3f high = capBox.getMax();
+    Base::BoundBox3d capBounds(low[0], low[1], low[2], high[0], high[1], high[2]);
+
+    // Measured under capRoot, which sits below pcTransform in the graph, so the
+    // placement still has to be applied by hand.
+    if (transform) {
+        if (const auto* geo = dynamic_cast<const App::GeoFeature*>(getObject())) {
+            capBounds = capBounds.Transformed(geo->Placement.getValue().toMatrix());
+        }
+    }
+
+    box.Add(capBounds);
+    return box;
 }
 
 void ViewProviderSectionAnalysis::updatePlaneVisual()
