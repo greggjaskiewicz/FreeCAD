@@ -438,18 +438,15 @@ void SectionAnalysisWidget::setGizmoPositions()
     }
     const Base::Vector3d onPlane = Part::SectionAnalysis::draggerAnchor(normal, offset, hint);
 
-    // The container goes where the offset reads zero, not on the plane: the
-    // dragger carries the offset as its own translation, so placing the
-    // container on the plane counted it twice and put the arrow one offset away.
-    const Base::Vector3d zeroPoint = onPlane - normal * offset;
-
     // Stood off towards the side the section is looked at from, so the handles
     // are not buried in the cap. Proportional to the model, since the handles
     // themselves are screen sized.
     constexpr double standOff = 0.02;
-    const Base::Vector3d anchor = zeroPoint + normal * (diagonal * standOff);
+    const Base::Vector3d tip = onPlane + normal * (diagonal * standOff);
 
-    offsetGizmo->Gizmo::setDraggerPlacement(anchor, normal);
+    // By tip, not by base: the gizmo carries the offset as its own translation,
+    // so placing the base on the plane counted it twice.
+    offsetGizmo->setDraggerTip(tip, normal);
     offsetGizmo->setMultFactor(feature->FlipCut.getValue() ? -1.0 : 1.0);
 
     // Both arcs on the arrow, never below it.
