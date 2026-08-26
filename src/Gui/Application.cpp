@@ -2606,10 +2606,7 @@ void Application::runApplication()
         defaultFormat.setRenderableType(QSurfaceFormat::OpenGL);
         defaultFormat.setProfile(QSurfaceFormat::CompatibilityProfile);
         defaultFormat.setOption(QSurfaceFormat::DeprecatedFunctions, true);
-        // Request stencil buffer on all platforms — needed for GPU section
-        // capping (stencil-based cross-section fill).  Most drivers provide
-        // D24S8 by default, so this is typically a no-op.
-        defaultFormat.setStencilBufferSize(8);
+
 #if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
         // QGuiApplication::platformName() doesn't yet work at this point, so we use the env var
         if (getenv("WAYLAND_DISPLAY")) {
