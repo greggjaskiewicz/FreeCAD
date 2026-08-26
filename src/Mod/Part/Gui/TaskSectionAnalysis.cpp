@@ -31,8 +31,6 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 
-#include <Bnd_Box.hxx>
-#include <BRepBndLib.hxx>
 
 #include <App/Application.h>
 #include <App/Document.h>
@@ -428,17 +426,28 @@ void SectionAnalysisWidget::setGizmoPositions()
 
     // Anchored on the geometry rather than on the plane's closest approach to
     // the world origin, which on an imported assembly is nowhere near the model.
-    Bnd_Box bbox;
+    // The box comes from the view provider so the handles and the plane quad are
+    // placed from the same one - measuring it twice let them drift apart.
+    // Without a box there is no hint worth having: draggerAnchor would fall back
+    // to the plane's closest approach to the world origin, which is the very
+    // thing this exists to avoid.
     Base::Vector3d hint(0, 0, 0);
-    if (feature->sourceBoundingBox(bbox) && !bbox.IsVoid()) {
+    double diagonal = 0.0;
+    if (!viewProvider || !viewProvider->sourceBounds(hint, diagonal)) {
+        return;
+    }
+    const Base::Vector3d onPlane = Part::SectionAnalysis::draggerAnchor(normal, offset, hint);
 
-        const gp_Pnt lo = bbox.CornerMin();
-        const gp_Pnt hi = bbox.CornerMax();
-        hint = Base::Vector3d((lo.X() + hi.X()) * 0.5,
-                            (lo.Y() + hi.Y()) * 0.5,
-                            (lo.Z() + hi.Z()) * 0.5);
-    } 
-    const Base::Vector3d anchor = Part::SectionAnalysis::draggerAnchor(normal, offset, hint);
+    // The container goes where the offset reads zero, not on the plane: the
+    // dragger carries the offset as its own translation, so placing the
+    // container on the plane counted it twice and put the arrow one offset away.
+    const Base::Vector3d zeroPoint = onPlane - normal * offset;
+
+    // Stood off towards the side the section is looked at from, so the handles
+    // are not buried in the cap. Proportional to the model, since the handles
+    // themselves are screen sized.
+    constexpr double standOff = 0.02;
+    const Base::Vector3d anchor = zeroPoint + normal * (diagonal * standOff);
 
     offsetGizmo->Gizmo::setDraggerPlacement(anchor, normal);
     offsetGizmo->setMultFactor(feature->FlipCut.getValue() ? -1.0 : 1.0);
@@ -623,14 +632,12 @@ void SectionAnalysisWidget::onPresetChanged(int index)
 
     feature->PlaneNormal.setValue(normal);
 
-    // Center the offset on the combined bounding box of every source
-    Bnd_Box bbox;
-    if (feature->sourceBoundingBox(bbox)) {
-        double xmin, ymin, zmin, xmax, ymax, zmax;
-        bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
-        Base::Vector3d center((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2);
-        double centerProj = center.x * normal.x + center.y * normal.y + center.z * normal.z;
-        feature->PlaneOffset.setValue(centerProj);
+    // Center the offset on the combined bounding box of every source, from the
+    // same box the plane quad and the handles use.
+    Base::Vector3d centre;
+    double diagonal = 0.0;
+    if (viewProvider && viewProvider->sourceBounds(centre, diagonal)) {
+        feature->PlaneOffset.setValue(centre * normal);
     }
 
     // The offset box is what the arrow gizmo reads, so it has to follow too

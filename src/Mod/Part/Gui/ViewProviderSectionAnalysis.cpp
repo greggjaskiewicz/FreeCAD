@@ -33,6 +33,7 @@
 #include <QTimer>
 
 #include <Bnd_Box.hxx>
+#include <gp_Pnt.hxx>
 #include <Precision.hxx>
 #include <BRepBndLib.hxx>
 
@@ -755,10 +756,7 @@ void ViewProviderSectionAnalysis::updateCapFromScene()
         }
         // The cap lies in the plane, so the diagonal is a fair stand-in for how
         // far the section reaches whichever way the plane is turned.
-        const double dx = sourceBBox[3] - sourceBBox[0];
-        const double dy = sourceBBox[4] - sourceBBox[1];
-        const double dz = sourceBBox[5] - sourceBBox[2];
-        const double diagonal = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const double diagonal = sourceBBox.CalcDiagonalLength();
         fillStripHeight = (sourceBBoxValid && diagonal > 0.0)
             ? diagonal / stripsAcrossSection
             : chainTolerance;
@@ -1175,8 +1173,26 @@ void ViewProviderSectionAnalysis::refreshSourceBBoxCache()
         return;
     }
 
-    bbox.Get(sourceBBox[0], sourceBBox[1], sourceBBox[2], sourceBBox[3], sourceBBox[4], sourceBBox[5]);
+    // sourceBoundingBox returned true, so the box is not void and the corners
+    // are safe to ask for.
+    const gp_Pnt lo = bbox.CornerMin();
+    const gp_Pnt hi = bbox.CornerMax();
+    sourceBBox = Base::BoundBox3d(lo.X(), lo.Y(), lo.Z(), hi.X(), hi.Y(), hi.Z());
     sourceBBoxValid = true;
+}
+
+bool ViewProviderSectionAnalysis::sourceBounds(Base::Vector3d& centre, double& diagonal)
+{
+    if (!sourceBBoxValid) {
+        refreshSourceBBoxCache();
+    }
+    if (!sourceBBoxValid) {
+        return false;
+    }
+
+    centre = sourceBBox.GetCenter();
+    diagonal = sourceBBox.CalcDiagonalLength();
+    return true;
 }
 
 void ViewProviderSectionAnalysis::updatePlaneVisual()
@@ -1202,12 +1218,12 @@ void ViewProviderSectionAnalysis::updatePlaneVisual()
     if (!sourceBBoxValid) {
         return;
     }
-    const double xmin = sourceBBox[0];
-    const double ymin = sourceBBox[1];
-    const double zmin = sourceBBox[2];
-    const double xmax = sourceBBox[3];
-    const double ymax = sourceBBox[4];
-    const double zmax = sourceBBox[5];
+    const double xmin = sourceBBox.MinX;
+    const double ymin = sourceBBox.MinY;
+    const double zmin = sourceBBox.MinZ;
+    const double xmax = sourceBBox.MaxX;
+    const double ymax = sourceBBox.MaxY;
+    const double zmax = sourceBBox.MaxZ;
 
     Base::Vector3d n = feat->PlaneNormal.getValue();
     double d = feat->PlaneOffset.getValue();

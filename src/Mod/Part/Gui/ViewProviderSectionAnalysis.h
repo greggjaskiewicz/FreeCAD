@@ -156,6 +156,12 @@ public:
     void setPerSolidColors(bool on);
     void setShowPlane(bool on);
 
+    /// Centre and diagonal of the cached source bounding box. 
+    /// False if there is nothing to measure. 
+    /// Shared so the plane quad and the handles are placed
+    /// from one box - computing it twice let them drift apart.
+    bool sourceBounds(Base::Vector3d& centre, double& diagonal);
+
 protected:
     bool setEdit(int ModNum) override;
     void unsetEdit(int ModNum) override;
@@ -281,7 +287,7 @@ private:
     // Cached source bbox (xmin,ymin,zmin,xmax,ymax,zmax) for sizing the plane
     // quad without recomputing the source shape on every move.
     bool sourceBBoxValid = false;
-    double sourceBBox[6] = {0, 0, 0, 0, 0, 0};
+    Base::BoundBox3d sourceBBox;
 
     fastsignals::scoped_connection visibilityConn;
 
