@@ -144,7 +144,6 @@ void SectionAnalysisWidget::setupUi()
     presetCombo->addItem(tr("XZ Plane (Y normal)"));
     presetCombo->addItem(tr("YZ Plane (X normal)"));
     presetCombo->addItem(tr("View Direction"));
-    presetCombo->addItem(tr("Custom"));
     planeLayout->addWidget(presetCombo, 0, 1);
 
     // Detect current preset from normal
@@ -159,7 +158,10 @@ void SectionAnalysisWidget::setupUi()
         presetCombo->setCurrentIndex(static_cast<int>(Preset::YZ));
     }
     else {
-        presetCombo->setCurrentIndex(static_cast<int>(Preset::Custom));
+        // Any tilt bakes itself into PlaneNormal, so a reopened section usually
+        // matches no preset. Blank says that honestly; the tilt boxes still work,
+        // taking the current normal as their base.
+        presetCombo->setCurrentIndex(-1);
     }
 
     // Angle adjustments (tilt the plane from the preset orientation)
@@ -181,28 +183,7 @@ void SectionAnalysisWidget::setupUi()
     angle2Spin->setValue(0.0);
     planeLayout->addWidget(angle2Spin, 2, 1);
 
-    // Set angle labels and enable state based on initial preset
-    {
-        int idx = presetCombo->currentIndex();
-        if (idx == 0) {
-            angleLabel1->setText(tr("X Angle:"));
-            angleLabel2->setText(tr("Y Angle:"));
-        }
-        else if (idx == 1) {
-            angleLabel1->setText(tr("X Angle:"));
-            angleLabel2->setText(tr("Z Angle:"));
-        }
-        else if (idx == 2) {
-            angleLabel1->setText(tr("Y Angle:"));
-            angleLabel2->setText(tr("Z Angle:"));
-        }
-        else {
-            angleLabel1->setText(tr("Angle 1:"));
-            angleLabel2->setText(tr("Angle 2:"));
-            angle1Spin->setEnabled(false);
-            angle2Spin->setEnabled(false);
-        }
-    }
+    applyPresetAngleLabels(static_cast<Preset>(presetCombo->currentIndex()));
 
     // Offset along the normal. The arrow gizmo edits this box rather than the
     // feature, so dragging and typing go through exactly the same path.
@@ -550,6 +531,30 @@ void SectionAnalysisWidget::setupConnections()
     connect(updateViewCheck, &QCheckBox::toggled, this, &SectionAnalysisWidget::onUpdateViewToggled);
 }
 
+void SectionAnalysisWidget::applyPresetAngleLabels(Preset preset)
+{
+    switch (preset) {
+        case Preset::XY:
+            angleLabel1->setText(tr("X Angle:"));
+            angleLabel2->setText(tr("Y Angle:"));
+            break;
+        case Preset::XZ:
+            angleLabel1->setText(tr("X Angle:"));
+            angleLabel2->setText(tr("Z Angle:"));
+            break;
+        case Preset::YZ:
+            angleLabel1->setText(tr("Y Angle:"));
+            angleLabel2->setText(tr("Z Angle:"));
+            break;
+        default:
+            // View direction, or no preset at all: the tilt axes are derived
+            // from the current normal, so they have no standing names.
+            angleLabel1->setText(tr("Angle 1:"));
+            angleLabel2->setText(tr("Angle 2:"));
+            break;
+    }
+}
+
 void SectionAnalysisWidget::onPresetChanged(int index)
 {
     Base::Vector3d normal;
@@ -580,35 +585,12 @@ void SectionAnalysisWidget::onPresetChanged(int index)
             break;
         }
         default:
-            // Custom: no base axis for angle decomposition
-            angle1Spin->setEnabled(false);
-            angle2Spin->setEnabled(false);
+            // Blank combo: nothing to apply, the plane keeps the pose it has.
+            applyPresetAngleLabels(static_cast<Preset>(index));
             return;
     }
 
-    // Enable angle spinboxes for axis-aligned presets
-    angle1Spin->setEnabled(true);
-    angle2Spin->setEnabled(true);
-
-    // Update angle labels for the selected preset
-    switch (static_cast<Preset>(index)) {
-        case Preset::XY:
-            angleLabel1->setText(tr("X Angle:"));
-            angleLabel2->setText(tr("Y Angle:"));
-            break;
-        case Preset::XZ:
-            angleLabel1->setText(tr("X Angle:"));
-            angleLabel2->setText(tr("Z Angle:"));
-            break;
-        case Preset::YZ:
-            angleLabel1->setText(tr("Y Angle:"));
-            angleLabel2->setText(tr("Z Angle:"));
-            break;
-        default:
-            angleLabel1->setText(tr("Angle 1:"));
-            angleLabel2->setText(tr("Angle 2:"));
-            break;
-    }
+    applyPresetAngleLabels(static_cast<Preset>(index));
 
     // Reset angles when switching presets
     {
@@ -672,14 +654,14 @@ void SectionAnalysisWidget::angleReferenceFrame(
     // The preset gives the base orientation; the sign is taken from the current
     // normal so a section created facing -X keeps facing that way.
     const Base::Vector3d curN = feature->PlaneNormal.getValue();
-    switch (presetCombo->currentIndex()) {
-        case 0:
+    switch (static_cast<Preset>(presetCombo->currentIndex())) {
+        case Preset::XY:
             baseNormal = Base::Vector3d(0, 0, (curN.z < 0) ? -1.0 : 1.0);
             break;
-        case 1:
+        case Preset::XZ:
             baseNormal = Base::Vector3d(0, (curN.y < 0) ? -1.0 : 1.0, 0);
             break;
-        case 2:
+        case Preset::YZ:
             baseNormal = Base::Vector3d((curN.x < 0) ? -1.0 : 1.0, 0, 0);
             break;
         default: {
@@ -699,7 +681,7 @@ void SectionAnalysisWidget::angleReferenceFrame(
     // Whichever world axis the normal leans on most is the one there is no
     // point turning about; the other two are the tilt axes. Picking the largest
     // component rather than testing against a threshold keeps this right for the
-    // presets that are not axis aligned - View Direction and Custom - where a
+    // presets that are not axis aligned - view direction, or none at all - where a
     // threshold could fall through and hand back an axis nearly parallel to the
     // normal, which is a degenerate pivot.
     const double alongX = std::abs(baseNormal.x);
@@ -856,9 +838,8 @@ void SectionAnalysisWidget::updateFromFeature()
 
     // Decompose the current normal into angles relative to the current preset.
     // This is the exact inverse of the Rodrigues rotation in applyAngles().
-    int preset = presetCombo->currentIndex();
-    switch (preset) {
-        case 0: {  // XY plane (Z normal)
+    switch (static_cast<Preset>(presetCombo->currentIndex())) {
+        case Preset::XY: {  // Z normal
             // Forward: n = (cosA*sinB, sinA, cosA*cosB)
             Base::Vector3d ne = (n.z < 0) ? -n : n;
             double alpha = std::asin(std::clamp(ne.y, -1.0, 1.0));
@@ -868,7 +849,7 @@ void SectionAnalysisWidget::updateFromFeature()
             angle2Spin->setValue(beta * 180.0 / std::numbers::pi);
             break;
         }
-        case 1: {  // XZ plane (Y normal)
+        case Preset::XZ: {  // Y normal
             // Forward: n = (-cosA*sinB, cosA*cosB, -sinA)
             Base::Vector3d ne = (n.y < 0) ? -n : n;
             double alpha = std::asin(std::clamp(-ne.z, -1.0, 1.0));
@@ -878,7 +859,7 @@ void SectionAnalysisWidget::updateFromFeature()
             angle2Spin->setValue(beta * 180.0 / std::numbers::pi);
             break;
         }
-        case 2: {  // YZ plane (X normal)
+        case Preset::YZ: {  // X normal
             // Forward: n = (cosA*cosB, cosA*sinB, sinA)
             Base::Vector3d ne = (n.x < 0) ? -n : n;
             double alpha = std::asin(std::clamp(ne.z, -1.0, 1.0));
@@ -889,7 +870,7 @@ void SectionAnalysisWidget::updateFromFeature()
             break;
         }
         default:
-            break;  // Custom/View Direction: leave angles as-is
+            break;  // No preset, or view direction: leave angles as-is
     }
 
     // The offset box is part of the same picture, and the arrow gizmo reads it

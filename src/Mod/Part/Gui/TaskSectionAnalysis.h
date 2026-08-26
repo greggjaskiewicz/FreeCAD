@@ -58,14 +58,14 @@ class SectionAnalysisWidget: public QWidget
 public:
     /// Entries of the preset combo, in order. The index is used to pick the base
     /// normal and to label the two angle boxes, so it is worth naming rather
-    /// than reading `case 2:` and counting rows in the constructor.
+    /// than reading `case 2:` and counting rows in the constructor. A plane
+    /// matching no entry leaves the combo blank, i.e. currentIndex() == -1.
     enum class Preset
     {
         XY = 0,   //!< Z normal
         XZ = 1,   //!< Y normal
         YZ = 2,   //!< X normal
         ViewDirection = 3,
-        Custom = 4,
     };
 
     explicit SectionAnalysisWidget(
@@ -114,6 +114,9 @@ private:
         Base::Vector3d& angle1Axis,
         Base::Vector3d& angle2Axis
     ) const;
+
+    /// Name the two tilt boxes after the axes the given preset turns about.
+    void applyPresetAngleLabels(Preset preset);
 
     void onPresetChanged(int index);
     void onAngle1Changed(double val);
