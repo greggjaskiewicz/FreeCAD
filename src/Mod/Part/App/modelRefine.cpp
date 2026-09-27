@@ -849,6 +849,25 @@ void collectConicEdges(const TopoDS_Shell& shell, TopTools_IndexedMapOfShape& ma
         }
     }
 }
+
+// BRep_Tool::IsClosed(edge, face) checks if the edge of that face's seam is
+// the closing curve of a periodic surface (two per curve, if I understand correctly).
+// FuseEdges works from 3D alone, so it fuses seams and leaves the wires broken.
+static void collectSeamEdges(const TopoDS_Shell& shell, TopTools_IndexedMapOfShape& map)
+{
+    for (TopExp_Explorer fx(shell, TopAbs_FACE); fx.More(); fx.Next()) {
+        const TopoDS_Face& face = TopoDS::Face(fx.Current());
+        for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next()) {
+            const TopoDS_Edge edge = TopoDS::Edge(ex.Current());
+            if (edge.IsNull()) {
+                continue;
+            }
+            if (BRep_Tool::IsClosed(edge, face)) {
+                map.Add(edge);
+            }
+        }
+    }
+}
 #endif
 
 FaceTypedBSpline::FaceTypedBSpline()
@@ -1312,6 +1331,7 @@ bool FaceUniter::process()
 #if OCC_VERSION_HEX <= 0x7fffff
         TopTools_IndexedMapOfShape map;
         collectConicEdges(workShell, map);
+        collectSeamEdges(workShell, map);
         edgeFuse.AvoidEdges(map);
 #endif
         TopTools_DataMapOfShapeShape affectedFaces;
